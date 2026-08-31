@@ -13,7 +13,7 @@ Mục đích của tài liệu là:
 * Làm cầu nối giữa yêu cầu nghiệp vụ (`requirements.md`, `business-rules.md`) và các artifact triển khai chi tiết hơn (`user-stories.md`, `architecture.md`), giúp cả nhóm có cùng cách hiểu về sản phẩm trước khi bắt tay vào thiết kế/code.
 * Là nguồn tham chiếu xuyên suốt vòng đời dự án, có thể cập nhật khi yêu cầu thay đổi (ghi lại thay đổi trong `decision-log.md`).
 
-> Chi tiết Acceptance Criteria cho từng chức năng được tách riêng vào tài liệu [`user-stories.md`](../04-backlog/user-stories.md) để dễ quản lý theo từng User Story — xem mục 2.1 và 3 bên dưới để biết cách 2 tài liệu liên kết với nhau.
+> Chi tiết Acceptance Criteria cho từng chức năng được tách riêng vào tài liệu [`user-stories.md`](user-stories.md) để dễ quản lý theo từng User Story — xem mục 2.1 và 3 bên dưới để biết cách 2 tài liệu liên kết với nhau.
 
 ## **1.2**       **Business objectives**
 
@@ -90,7 +90,7 @@ Mục tiêu cuối cùng là giúp người dùng hiểu rõ yêu cầu đang �
 
 ## **2.1**       **User stories**
 
-Toàn bộ 10 User Stories (US-01 đến US-10) được viết chi tiết trong [`user-stories.md`](../04-backlog/user-stories.md), tách theo 4 nhóm nghiệp vụ chính:
+Toàn bộ 10 User Stories (US-01 đến US-10) được viết chi tiết trong [`user-stories.md`](user-stories.md), tách theo 4 nhóm nghiệp vụ chính:
 
 | Nhóm | User Stories |
 |---|---|
@@ -99,7 +99,7 @@ Toàn bộ 10 User Stories (US-01 đến US-10) được viết chi tiết trong
 | Expense Settlement & Trip Closure | US-07, US-08 |
 | Dashboard & Notification | US-09, US-10 |
 
-Mỗi story bám theo đúng 1 hoặc nhiều Functional Requirement trong [`requirements.md`](../02-requirements/requirements.md) và lồng ghép các Business Rule liên quan trong [`business-rules.md`](../02-requirements/business-rules.md) vào Acceptance Criteria — xem bảng Traceability Matrix ở cuối `user-stories.md`.
+Mỗi story bám theo đúng 1 hoặc nhiều Functional Requirement trong [`requirements.md`](../02-vault/02-requirements/requirements.md) và lồng ghép các Business Rule liên quan trong [`business-rules.md`](../02-vault/03-domain/business-rules.md) vào Acceptance Criteria — xem bảng Traceability Matrix ở cuối `user-stories.md`.
 
 ## **2.2**       **User workflow**
 
@@ -110,7 +110,7 @@ Luồng nghiệp vụ tổng thể (Trip Request → Policy Check → Approval �
 
 # **3**           **ACCEPTANCE CRITERIA**
 
-Acceptance Criteria cho từng User Story được viết đầy đủ theo định dạng Given/When/Then trong [`user-stories.md`](../04-backlog/user-stories.md) (mục "Acceptance Criteria" của từng story). Tài liệu PRD này không lặp lại nội dung AC để tránh 2 nguồn dữ liệu (single source of truth), chỉ tham chiếu sang.
+Acceptance Criteria cho từng User Story được viết đầy đủ theo định dạng Given/When/Then trong [`user-stories.md`](user-stories.md) (mục "Acceptance Criteria" của từng story). Tài liệu PRD này không lặp lại nội dung AC để tránh 2 nguồn dữ liệu (single source of truth), chỉ tham chiếu sang.
 
 # **4**           **NON-FUNCTIONAL REQUIREMENTS**
 
@@ -140,11 +140,11 @@ Screen flow chi tiết (wireframe/click-through) được xây dựng trong Prot
 
 ## **5.2**       **Design System**
 
-Design tokens (màu sắc, typography, spacing, component states) được định nghĩa trong [`design-system.md`](../05-design/design-system.md) — cập nhật ở Lớp 3 song song với prototype.
+Design tokens (màu sắc, typography, spacing, component states) được định nghĩa trong [`design-system.md`](../04-design/design-system.md) — cập nhật ở Lớp 3 song song với prototype.
 
 #      **6**           **DATABASE DESIGN**
 
-Data model chi tiết (ERD, bảng, quan hệ) được thiết kế trong [`architecture.md`](../06-technical/architecture.md) và `data-model.md` do Engineering phụ trách, tham chiếu trực tiếp các entity xuất hiện trong Functional Scope ở mục 1.3: Trip Request, Itinerary, Approval, Expense, Policy.
+Data model chi tiết (ERD, bảng, quan hệ) được thiết kế trong [`architecture.md`](../05-technical/architecture.md) và `data-model.md` do Engineering phụ trách, tham chiếu trực tiếp các entity xuất hiện trong Functional Scope ở mục 1.3: Trip Request, Itinerary, Approval, Expense, Policy.
 
 # **7**          **REFERENCES**
 

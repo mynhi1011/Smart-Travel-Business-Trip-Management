@@ -5,7 +5,7 @@
 **Phiên bản:** v1.0
 **Ngày tạo:** 2026-08-28
 **Tác giả:** Nhóm 11 (tổng hợp)
-**Tài liệu nguồn:** `requirements.md`, `business-rules.md`, `user-stories.md`, `API.md`, `data-model.md`, `story-specs/`
+**Tài liệu nguồn:** `02-vault/02-requirements/requirements.md`, `02-vault/03-domain/business-rules.md`, `03-product/user-stories.md`, `05-technical/API.md`, `05-technical/data-model.md`, `05-technical/story-specs/`
 
 ---
 
@@ -39,7 +39,7 @@ Functional Requirement (REQ-TR-*)
     │         ├──► Business Rule (BR-TR-*)
     │         ├──► API Endpoint
     │         ├──► DB Table / Column
-    │         ├──► Story Spec (story-specs/US-*.md)
+    │         ├──► Story Spec (05-technical/story-specs/US-*.md)
     │         └──► Test Cases (T*.*)
     │
     └──► Non-Functional Requirement (NFR-TR-*)
@@ -74,7 +74,7 @@ Functional Requirement (REQ-TR-*)
 | **Business Rules** | [BR-TR-02] Per Diem, [BR-TR-03] Advance Notice |
 | **API Endpoints** | `POST /api/v1/trips`, `GET /api/v1/trips`, `GET /api/v1/trips/:id`, `PATCH /api/v1/trips/:id`, `DELETE /api/v1/trips/:id` |
 | **DB Tables** | `trips` (INSERT), `audit_logs` (INSERT) |
-| **Story Spec** | `story-specs/US-01-create-trip-request.md` |
+| **Story Spec** | `05-technical/story-specs/US-01-create-trip-request.md` |
 | **Test Cases** | T1.1–T1.13 |
 | **Acceptance Criteria** | AC 1.1, AC 1.2, AC 1.3 |
 | **Status** | ✅ Covered |
@@ -91,7 +91,7 @@ Functional Requirement (REQ-TR-*)
 | **Business Rules** | [BR-TR-07] AI Grounding Rule (guardrail server-side) |
 | **API Endpoints** | `POST /api/v1/ai/generate-itinerary` |
 | **DB Tables** | `itinerary_items` (INSERT batch, `is_ai_generated=true`), `audit_logs` (INSERT `AI_ITINERARY_APPLIED`) |
-| **Story Spec** | `story-specs/US-02-ai-itinerary.md` |
+| **Story Spec** | `05-technical/story-specs/US-02-ai-itinerary.md` |
 | **Test Cases** | T2.1–T2.13 |
 | **Acceptance Criteria** | AC 2.1, AC 2.2 |
 | **External Dependency** | Google Gemini API (ADR-06) |
@@ -109,7 +109,7 @@ Functional Requirement (REQ-TR-*)
 | **Business Rules** | [BR-TR-01] Hotel Limit, [BR-TR-02] Per Diem, [BR-TR-03] Advance Notice, [BR-TR-04] Approval Matrix |
 | **API Endpoints** | `POST /api/v1/trips/:id/submit` (trigger PolicyCheckEngine) |
 | **DB Tables** | `policy_check_results` (INSERT snapshot), `trips` (UPDATE `requires_level2`, `is_urgent`), `audit_logs` |
-| **Story Spec** | `story-specs/US-04-policy-check.md` |
+| **Story Spec** | `05-technical/story-specs/US-04-policy-check.md` |
 | **Test Cases** | T4.1–T4.12 |
 | **Acceptance Criteria** | AC 4.1, AC 4.2 |
 | **Status** | ✅ Covered |
@@ -126,7 +126,7 @@ Functional Requirement (REQ-TR-*)
 | **Business Rules** | [BR-TR-04] Approval Matrix (20M threshold) |
 | **API Endpoints** | `POST /api/v1/trips/:id/approve`, `POST /api/v1/trips/:id/reject` |
 | **DB Tables** | `trips` (UPDATE status), `approval_records` (INSERT LEVEL_1 + snapshot), `notifications`, `audit_logs` |
-| **Story Spec** | `story-specs/US-05-manager-approve-l1.md` |
+| **Story Spec** | `05-technical/story-specs/US-05-manager-approve-l1.md` |
 | **Test Cases** | T5.1–T5.15 |
 | **Acceptance Criteria** | AC 5.1, AC 5.2, AC 5.3 |
 | **Status** | ✅ Covered |
@@ -143,7 +143,7 @@ Functional Requirement (REQ-TR-*)
 | **Business Rules** | [BR-TR-04] Approval Matrix |
 | **API Endpoints** | `POST /api/v1/trips/:id/approve` (TRAVEL_ADMIN role, PENDING_ADMIN_APPROVAL state), `POST /api/v1/trips/:id/reject` |
 | **DB Tables** | `trips` (UPDATE status), `approval_records` (INSERT LEVEL_2), `notifications`, `audit_logs` |
-| **Story Spec** | `story-specs/US-06-travel-admin-approve-l2.md` |
+| **Story Spec** | `05-technical/story-specs/US-06-travel-admin-approve-l2.md` |
 | **Test Cases** | T6.1–T6.10 |
 | **Acceptance Criteria** | AC 6.1, AC 6.2 |
 | **Status** | ✅ Covered |
@@ -160,7 +160,7 @@ Functional Requirement (REQ-TR-*)
 | **Business Rules** | [BR-TR-01] Hotel Limit (warning), [BR-TR-06] Closed Trip Immutability |
 | **API Endpoints** | `GET /api/v1/trips/:id/itinerary`, `POST /api/v1/trips/:id/itinerary`, `PATCH /api/v1/trips/:id/itinerary/:itemId`, `DELETE /api/v1/trips/:id/itinerary/:itemId` |
 | **DB Tables** | `itinerary_items` (CRUD), `audit_logs` |
-| **Story Spec** | `story-specs/US-03-itinerary-builder.md` |
+| **Story Spec** | `05-technical/story-specs/US-03-itinerary-builder.md` |
 | **Test Cases** | T3.1–T3.14 |
 | **Acceptance Criteria** | AC 3.1, AC 3.2 |
 | **Status** | ✅ Covered |
@@ -177,7 +177,7 @@ Functional Requirement (REQ-TR-*)
 | **Business Rules** | [BR-TR-05] Variance Tolerance, [BR-TR-06] Immutability |
 | **API Endpoints** | `POST /api/v1/trips/:id/expense`, `GET /api/v1/trips/:id/expense`, `PATCH /api/v1/trips/:id/expense`, `POST /api/v1/trips/:id/expense/items`, `PATCH /api/v1/trips/:id/expense/items/:itemId`, `DELETE /api/v1/trips/:id/expense/items/:itemId` |
 | **DB Tables** | `expenses` (INSERT/UPDATE), `expense_items` (CRUD), `audit_logs` |
-| **Story Spec** | `story-specs/US-07-expense-claim.md` |
+| **Story Spec** | `05-technical/story-specs/US-07-expense-claim.md` |
 | **Test Cases** | T7.1–T7.15 |
 | **Acceptance Criteria** | AC 7.1, AC 7.2, AC 7.3 |
 | **Status** | ✅ Covered |
@@ -194,7 +194,7 @@ Functional Requirement (REQ-TR-*)
 | **Business Rules** | [BR-TR-05] Variance Tolerance (0–10% cần giải trình, >10% cần Manager reapprove) |
 | **API Endpoints** | `POST /api/v1/trips/:id/expense/submit` (server tính variance) |
 | **DB Tables** | `expenses.variance_pct`, `expenses.variance_amount`, `expenses.total_actual` (server-computed), `expenses.manager_reapproval_required` |
-| **Story Spec** | `story-specs/US-07-expense-claim.md` |
+| **Story Spec** | `05-technical/story-specs/US-07-expense-claim.md` |
 | **Test Cases** | T7.3, T7.4, T7.5, T7.6 |
 | **Acceptance Criteria** | AC 7.2, AC 7.3 |
 | **Ghi chú** | `variance_pct` là server-computed field — client không được gửi |
@@ -212,7 +212,7 @@ Functional Requirement (REQ-TR-*)
 | **Business Rules** | [BR-TR-05] Variance Tolerance, [BR-TR-06] Closed Trip Immutability |
 | **API Endpoints** | `POST /api/v1/trips/:id/expense/approve`, `POST /api/v1/trips/:id/expense/reject`, `POST /api/v1/trips/:id/expense/reapprove`, `POST /api/v1/trips/:id/close` |
 | **DB Tables** | `expenses` (UPDATE status), `trips` (UPDATE `status=CLOSED`, `closed_at`), `audit_logs`, `notifications` |
-| **Story Spec** | `story-specs/US-08-finance-close.md` |
+| **Story Spec** | `05-technical/story-specs/US-08-finance-close.md` |
 | **Test Cases** | T8.1–T8.14 |
 | **Acceptance Criteria** | AC 8.1, AC 8.2, AC 8.3 |
 | **Status** | ✅ Covered |
@@ -229,7 +229,7 @@ Functional Requirement (REQ-TR-*)
 | **Business Rules** | [BR-TR-06] CLOSED = read-only |
 | **API Endpoints** | `GET /api/v1/dashboard` |
 | **DB Tables** | `trips` (READ, filtered by role), `expenses` (READ), `notifications` (READ unreadCount) |
-| **Story Spec** | `story-specs/US-09-dashboard.md` |
+| **Story Spec** | `05-technical/story-specs/US-09-dashboard.md` |
 | **Test Cases** | T9.1–T9.10 |
 | **Acceptance Criteria** | AC 9.1, AC 9.2 |
 | **Status** | ✅ Covered |
@@ -246,7 +246,7 @@ Functional Requirement (REQ-TR-*)
 | **Business Rules** | — |
 | **API Endpoints** | `GET /api/v1/notifications`, `PATCH /api/v1/notifications/:id/read`, `PATCH /api/v1/notifications/read-all`, `GET /api/v1/notifications/stream` (SSE) |
 | **DB Tables** | `notifications` (INSERT bởi NotificationService, UPDATE is_read) |
-| **Story Spec** | `story-specs/US-10-notification-pdf.md` |
+| **Story Spec** | `05-technical/story-specs/US-10-notification-pdf.md` |
 | **Test Cases** | T10.1–T10.8, T10.12–T10.15 |
 | **Acceptance Criteria** | AC 10.1 |
 | **Architecture** | ADR-07 (SSE thay vì WebSocket) |
@@ -264,7 +264,7 @@ Functional Requirement (REQ-TR-*)
 | **Business Rules** | [BR-TR-06] CLOSED = read-only (vẫn xuất được) |
 | **API Endpoints** | `GET /api/v1/trips/:id/export-pdf` |
 | **DB Tables** | `trips`, `itinerary_items`, `expenses`, `expense_items`, `approval_records` (READ only) |
-| **Story Spec** | `story-specs/US-10-notification-pdf.md` |
+| **Story Spec** | `05-technical/story-specs/US-10-notification-pdf.md` |
 | **Test Cases** | T10.5–T10.11 |
 | **Acceptance Criteria** | AC 10.2 |
 | **Tech** | Puppeteer 22 (ADR — PDF export) |
