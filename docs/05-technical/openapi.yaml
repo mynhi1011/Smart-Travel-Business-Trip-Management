@@ -1,0 +1,2230 @@
+openapi: 3.0.3
+
+info:
+  title: Smart Travel & Business Trip Management API
+  description: |
+    API Contract cho hệ thống quản lý công tác doanh nghiệp.
+    - **Base URL:** `http://localhost:3001/api/v1`
+    - **Auth:** JWT Bearer (Access Token 15m) + Refresh Token (httpOnly cookie, 7d)
+    - **Tiền tệ:** `integer` VND nguyên — ví dụ `1500000` = 1.500.000 VNĐ
+    - **Tham chiếu:** `architecture.md`, `data-model.md`, `business-rules.md`
+  version: "1.0.0"
+  contact:
+    name: Nhóm 11 — MIS3032_1
+  license:
+    name: Academic Use Only
+
+servers:
+  - url: http://localhost:3001/api/v1
+    description: Local Development
+
+# ─────────────────────────────────────────────────────────────
+# SECURITY SCHEMES
+# ─────────────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT Access Token — expires 15 phút.
+        Lấy từ `POST /auth/login` hoặc `POST /auth/refresh`.
+        Lưu in-memory (Zustand), KHÔNG localStorage.
+
+  # ─────────────────────────────────────────────────────────────
+  # SCHEMAS
+  # ─────────────────────────────────────────────────────────────
+  schemas:
+
+    # ── Enums ──────────────────────────────────────────────────
+    UserRole:
+      type: string
+      enum: [EMPLOYEE, MANAGER, TRAVEL_ADMIN, FINANCE, ADMIN]
+
+    JobGrade:
+      type: string
+      enum: [STAFF, MANAGER_GRADE, DIRECTOR]
+      description: |
+        STAFF → hotel max 1.000.000 VNĐ/đêm (BR-TR-01)
+        MANAGER_GRADE → 1.800.000 VNĐ/đêm
+        DIRECTOR → 3.000.000 VNĐ/đêm
+
+    DestinationType:
+      type: string
+      enum: [TIER1_CITY, OTHER]
+      description: |
+        TIER1_CITY (HN, HCM, ĐN) → per diem 400.000 VNĐ/ngày (BR-TR-02)
+        OTHER → 300.000 VNĐ/ngày
+
+    TripStatus:
+      type: string
+      enum:
+        - DRAFT
+        - SUBMITTED
+        - MANAGER_REVIEWING
+        - PENDING_ADMIN_APPROVAL
+        - APPROVED
+        - ONGOING
+        - EXPENSE_DRAFT
+        - EXPENSE_SUBMITTED
+        - EXPENSE_APPROVED
+        - EXPENSE_REJECTED
+        - MANAGER_REAPPROVE
+        - CLOSED
+        - REJECTED
+
+    TimeSlot:
+      type: string
+      enum: [MORNING, AFTERNOON, EVENING, ALL_DAY]
+
+    ItineraryCategory:
+      type: string
+      enum: [MEETING, ACCOMMODATION, TRANSPORT, MEAL, OTHER]
+
+    ApprovalLevel:
+      type: string
+      enum: [LEVEL_1, LEVEL_2, MANAGER_REAPPROVE]
+
+    ApprovalAction:
+      type: string
+      enum: [APPROVED, REJECTED]
+
+    ExpenseStatus:
+      type: string
+      enum: [DRAFT, SUBMITTED, APPROVED, REJECTED, CLOSED]
+
+    ExpenseCategory:
+      type: string
+      enum: [ACCOMMODATION, TRANSPORT, MEAL, PER_DIEM, OTHER]
+
+    NotificationType:
+      type: string
+      enum:
+        - TRIP_APPROVED
+        - TRIP_REJECTED
+        - PENDING_LEVEL1_APPROVAL
+        - PENDING_LEVEL2_APPROVAL
+        - EXPENSE_SUBMITTED
+        - EXPENSE_APPROVED
+        - EXPENSE_REJECTED
+        - MANAGER_REAPPROVAL_REQUIRED
+        - TRIP_CLOSED
+
+    # ── Shared / Small Objects ──────────────────────────────────
+    UserSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/UserRole'
+        jobGrade:
+          $ref: '#/components/schemas/JobGrade'
+        department:
+          type: string
+          nullable: true
+        managerId:
+          type: string
+          format: uuid
+          nullable: true
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          example: 45
+        totalPages:
+          type: integer
+          example: 3
+
+    ErrorResponse:
+      type: object
+      required: [error, message, requestId]
+      properties:
+        error:
+          type: string
+          example: VALIDATION_ERROR
+          description: Machine-readable error code
+        message:
+          type: string
+          example: "departureDate phải là ngày trong tương lai"
+        details:
+          type: object
+          additionalProperties: true
+          nullable: true
+        requestId:
+          type: string
+          example: req_abc123
+
+    # ── Policy Check ───────────────────────────────────────────
+    PolicyViolation:
+      type: object
+      properties:
+        code:
+          type: string
+          enum:
+            - POLICY_VIOLATION_ACCOMMODATION_OVER_BUDGET
+            - POLICY_VIOLATION_PER_DIEM_EXCEEDED
+            - URGENT_TRIP_NOTICE
+            - POLICY_VIOLATION_BUDGET_THRESHOLD
+        detail:
+          type: string
+        severity:
+          type: string
+          enum: [WARNING, BLOCKER]
+        rule:
+          type: string
+          example: BR-TR-01
+        limit:
+          type: integer
+          nullable: true
+        actual:
+          type: integer
+          nullable: true
+
+    PolicyCheckResult:
+      type: object
+      properties:
+        passed:
+          type: boolean
+        violations:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyViolation'
+        violationCount:
+          type: integer
+          minimum: 0
+        requiresLevel2Approval:
+          type: boolean
+        checkedAt:
+          type: string
+          format: date-time
+
+    # ── Approval Record ────────────────────────────────────────
+    ApprovalRecord:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        approver:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            role:
+              $ref: '#/components/schemas/UserRole'
+        approvalLevel:
+          $ref: '#/components/schemas/ApprovalLevel'
+        action:
+          $ref: '#/components/schemas/ApprovalAction'
+        comment:
+          type: string
+          nullable: true
+        budgetSnapshot:
+          type: integer
+          description: Snapshot ngân sách tại thời điểm duyệt (VND)
+        hadViolationsSnapshot:
+          type: boolean
+        actedAt:
+          type: string
+          format: date-time
+
+    # ── Trip ───────────────────────────────────────────────────
+    TripSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        employee:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            department:
+              type: string
+              nullable: true
+            jobGrade:
+              $ref: '#/components/schemas/JobGrade'
+        origin:
+          type: string
+          example: Hà Nội
+        destination:
+          type: string
+          example: TP. Hồ Chí Minh
+        destinationType:
+          $ref: '#/components/schemas/DestinationType'
+        departureDate:
+          type: string
+          format: date
+        returnDate:
+          type: string
+          format: date
+        tripDays:
+          type: integer
+          description: Server-computed — GENERATED ALWAYS AS (returnDate - departureDate + 1)
+          readOnly: true
+        purpose:
+          type: string
+        estimatedBudget:
+          type: integer
+          description: VND nguyên
+        status:
+          $ref: '#/components/schemas/TripStatus'
+        isUrgent:
+          type: boolean
+          readOnly: true
+          description: Server-computed từ working days diff (BR-TR-03)
+        requiresLevel2:
+          type: boolean
+          readOnly: true
+          description: Server-set bởi PolicyCheckEngine (BR-TR-04)
+        submittedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    TripDetail:
+      allOf:
+        - $ref: '#/components/schemas/TripSummary'
+        - type: object
+          properties:
+            hotelCostPerNight:
+              type: integer
+              nullable: true
+            hotelNights:
+              type: integer
+              nullable: true
+            perDiemBudget:
+              type: integer
+              nullable: true
+            transportBudget:
+              type: integer
+              nullable: true
+            otherBudget:
+              type: integer
+              nullable: true
+            urgencyReason:
+              type: string
+              nullable: true
+            policyCheckResult:
+              $ref: '#/components/schemas/PolicyCheckResult'
+              nullable: true
+            approvalRecords:
+              type: array
+              items:
+                $ref: '#/components/schemas/ApprovalRecord'
+            approvedAt:
+              type: string
+              format: date-time
+              nullable: true
+            closedAt:
+              type: string
+              format: date-time
+              nullable: true
+
+    TripCreateRequest:
+      type: object
+      required:
+        - origin
+        - destination
+        - destinationType
+        - departureDate
+        - returnDate
+        - purpose
+        - estimatedBudget
+      properties:
+        origin:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Hà Nội
+        destination:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Đà Nẵng
+        destinationType:
+          $ref: '#/components/schemas/DestinationType'
+        departureDate:
+          type: string
+          format: date
+          description: Phải >= ngày hôm nay
+          example: "2026-09-20"
+        returnDate:
+          type: string
+          format: date
+          description: Phải >= departureDate
+          example: "2026-09-22"
+        purpose:
+          type: string
+          minLength: 10
+          maxLength: 1000
+        estimatedBudget:
+          type: integer
+          minimum: 1
+          description: VND nguyên — > 0
+        hotelCostPerNight:
+          type: integer
+          minimum: 0
+          nullable: true
+        hotelNights:
+          type: integer
+          minimum: 0
+          nullable: true
+        perDiemBudget:
+          type: integer
+          minimum: 0
+          nullable: true
+        transportBudget:
+          type: integer
+          minimum: 0
+          nullable: true
+        otherBudget:
+          type: integer
+          minimum: 0
+          nullable: true
+
+    TripUpdateRequest:
+      type: object
+      description: Tất cả fields optional. Server strip status/isUrgent/requiresLevel2/tripDays.
+      properties:
+        origin:
+          type: string
+          minLength: 1
+          maxLength: 200
+        destination:
+          type: string
+          minLength: 1
+          maxLength: 200
+        destinationType:
+          $ref: '#/components/schemas/DestinationType'
+        departureDate:
+          type: string
+          format: date
+        returnDate:
+          type: string
+          format: date
+        purpose:
+          type: string
+          minLength: 10
+          maxLength: 1000
+        estimatedBudget:
+          type: integer
+          minimum: 1
+        hotelCostPerNight:
+          type: integer
+          minimum: 0
+          nullable: true
+        hotelNights:
+          type: integer
+          minimum: 0
+          nullable: true
+        perDiemBudget:
+          type: integer
+          minimum: 0
+          nullable: true
+        transportBudget:
+          type: integer
+          minimum: 0
+          nullable: true
+        otherBudget:
+          type: integer
+          minimum: 0
+          nullable: true
+
+    # ── Itinerary ──────────────────────────────────────────────
+    ItineraryItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tripId:
+          type: string
+          format: uuid
+        itemDate:
+          type: string
+          format: date
+        dayNumber:
+          type: integer
+          minimum: 1
+        timeSlot:
+          $ref: '#/components/schemas/TimeSlot'
+        location:
+          type: string
+        activity:
+          type: string
+        category:
+          $ref: '#/components/schemas/ItineraryCategory'
+        estimatedCost:
+          type: integer
+          minimum: 0
+          description: VND nguyên
+        notes:
+          type: string
+          nullable: true
+        isAiGenerated:
+          type: boolean
+          readOnly: true
+        sortOrder:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ItineraryItemRequest:
+      type: object
+      required: [itemDate, timeSlot, location, activity, category]
+      properties:
+        itemDate:
+          type: string
+          format: date
+          description: Phải trong khoảng [departureDate, returnDate] của trip
+        timeSlot:
+          $ref: '#/components/schemas/TimeSlot'
+        location:
+          type: string
+          minLength: 1
+          maxLength: 300
+        activity:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        category:
+          $ref: '#/components/schemas/ItineraryCategory'
+        estimatedCost:
+          type: integer
+          minimum: 0
+          default: 0
+        notes:
+          type: string
+          maxLength: 2000
+          nullable: true
+        sortOrder:
+          type: integer
+          default: 0
+
+    # ── Expense ────────────────────────────────────────────────
+    ExpenseItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        expenseDate:
+          type: string
+          format: date
+        category:
+          $ref: '#/components/schemas/ExpenseCategory'
+        amount:
+          type: integer
+          minimum: 1
+          description: VND nguyên — phải > 0
+        description:
+          type: string
+        receiptUrl:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    ExpenseItemRequest:
+      type: object
+      required: [expenseDate, category, amount, description]
+      properties:
+        expenseDate:
+          type: string
+          format: date
+        category:
+          $ref: '#/components/schemas/ExpenseCategory'
+        amount:
+          type: integer
+          minimum: 1
+          description: VND nguyên — phải > 0
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+        receiptUrl:
+          type: string
+          maxLength: 500
+          nullable: true
+
+    ExpenseClaim:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tripId:
+          type: string
+          format: uuid
+        totalActual:
+          type: integer
+          readOnly: true
+          description: Server-computed = SUM(items.amount)
+        estimatedBudgetSnapshot:
+          type: integer
+          readOnly: true
+          description: Snapshot trip.estimatedBudget tại thời điểm tạo expense
+        variancePct:
+          type: number
+          format: float
+          nullable: true
+          readOnly: true
+          description: Server-computed = (totalActual - budgetSnapshot) / budgetSnapshot × 100
+        varianceAmount:
+          type: integer
+          nullable: true
+          readOnly: true
+          description: Server-computed = totalActual - budgetSnapshot (VND)
+        justification:
+          type: string
+          nullable: true
+          description: Bắt buộc khi 0 < variancePct ≤ 10 (BR-TR-05)
+        managerReapprovalRequired:
+          type: boolean
+          readOnly: true
+          description: Server-set khi variancePct > 10 (BR-TR-05)
+        managerReapproved:
+          type: boolean
+          readOnly: true
+        managerReapproverId:
+          type: string
+          format: uuid
+          nullable: true
+          readOnly: true
+        managerReapprovedAt:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+        status:
+          $ref: '#/components/schemas/ExpenseStatus'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExpenseItem'
+        submittedAt:
+          type: string
+          format: date-time
+          nullable: true
+        approvedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    # ── Notification ───────────────────────────────────────────
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/NotificationType'
+        message:
+          type: string
+        referenceId:
+          type: string
+          format: uuid
+          nullable: true
+        referenceType:
+          type: string
+          enum: [TRIP, EXPENSE]
+          nullable: true
+        isRead:
+          type: boolean
+        readAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+  # ── Common Responses ────────────────────────────────────────
+  responses:
+    Unauthorized:
+      description: Token thiếu hoặc không hợp lệ
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: UNAUTHORIZED
+            message: Token không hợp lệ hoặc đã hết hạn
+            requestId: req_abc123
+    Forbidden:
+      description: Không đủ quyền
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: FORBIDDEN
+            message: "Role 'EMPLOYEE' không có quyền thực hiện action này"
+            requestId: req_abc123
+    NotFound:
+      description: Resource không tồn tại
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: NOT_FOUND
+            message: Trip không tồn tại
+            requestId: req_abc123
+    ValidationError:
+      description: Input không hợp lệ
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: VALIDATION_ERROR
+            message: departureDate phải là ngày trong tương lai
+            details:
+              field: departureDate
+              received: "2025-01-01"
+            requestId: req_abc123
+    InvalidState:
+      description: Action không hợp lệ với trạng thái hiện tại
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: INVALID_STATE
+            message: "Không thể submit trip có status: APPROVED"
+            requestId: req_abc123
+    TripImmutable:
+      description: Trip đã CLOSED — không thể chỉnh sửa (BR-TR-06)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: TRIP_IMMUTABLE
+            message: Trip đã đóng hồ sơ, không thể chỉnh sửa (BR-TR-06)
+            requestId: req_abc123
+    InternalError:
+      description: Lỗi server không xác định
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: INTERNAL_ERROR
+            message: Đã xảy ra lỗi không xác định. Vui lòng thử lại sau.
+            requestId: req_abc123
+
+  # ── Common Parameters ───────────────────────────────────────
+  parameters:
+    tripId:
+      name: tripId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    itemId:
+      name: itemId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    notificationId:
+      name: notificationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    pageParam:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    limitParam:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+# ─────────────────────────────────────────────────────────────
+# PATHS
+# ─────────────────────────────────────────────────────────────
+paths:
+
+  # ── Auth ─────────────────────────────────────────────────────
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Đăng nhập
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  maxLength: 255
+                  example: employee@company.com
+                password:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+                  example: SecureP@ss123
+      responses:
+        '200':
+          description: Đăng nhập thành công
+          headers:
+            Set-Cookie:
+              description: refreshToken (httpOnly, SameSite=Strict, 7d)
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken:
+                    type: string
+                    description: JWT — lưu in-memory, KHÔNG localStorage
+                  tokenType:
+                    type: string
+                    example: Bearer
+                  expiresIn:
+                    type: integer
+                    example: 900
+                  user:
+                    $ref: '#/components/schemas/UserSummary'
+              example:
+                accessToken: eyJhbGciOiJIUzI1NiJ9...
+                tokenType: Bearer
+                expiresIn: 900
+                user:
+                  id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                  name: Nguyễn Văn A
+                  email: employee@company.com
+                  role: EMPLOYEE
+                  jobGrade: STAFF
+                  department: IT
+                  managerId: 7cb85f64-1234-4562-b3fc-2c963f66afa6
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Làm mới Access Token
+      operationId: refreshToken
+      description: Dùng httpOnly cookie `refreshToken`. Request body không cần.
+      responses:
+        '200':
+          description: Token mới
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken:
+                    type: string
+                  tokenType:
+                    type: string
+                    example: Bearer
+                  expiresIn:
+                    type: integer
+                    example: 900
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/logout:
+    delete:
+      tags: [Auth]
+      summary: Đăng xuất
+      operationId: logout
+      security:
+        - BearerAuth: []
+      responses:
+        '204':
+          description: Đăng xuất thành công — refresh token bị revoke
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Thông tin user hiện tại
+      operationId: getMe
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Thông tin user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ── Trips ─────────────────────────────────────────────────────
+  /trips:
+    get:
+      tags: [Trips]
+      summary: Danh sách Trip Requests
+      operationId: listTrips
+      security:
+        - BearerAuth: []
+      description: |
+        Kết quả được filter server-side theo role:
+        - EMPLOYEE: chỉ trip của mình
+        - MANAGER: trip của subordinates
+        - TRAVEL_ADMIN / FINANCE / ADMIN: tất cả
+      parameters:
+        - $ref: '#/components/parameters/pageParam'
+        - $ref: '#/components/parameters/limitParam'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/TripStatus'
+        - name: employeeId
+          in: query
+          description: Chỉ MANAGER+ mới dùng được
+          schema:
+            type: string
+            format: uuid
+        - name: departureFrom
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: departureTo
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: sortBy
+          in: query
+          schema:
+            type: string
+            enum: [createdAt, departureDate, estimatedBudget]
+            default: createdAt
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        '200':
+          description: Danh sách trips
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TripSummary'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      tags: [Trips]
+      summary: Tạo Trip Request mới
+      operationId: createTrip
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** EMPLOYEE only.
+        Server-computed (bị strip nếu client gửi): `tripDays`, `isUrgent`, `requiresLevel2`, `status`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TripCreateRequest'
+      responses:
+        '201':
+          description: Trip được tạo với status DRAFT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripDetail'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /trips/{tripId}:
+    parameters:
+      - $ref: '#/components/parameters/tripId'
+
+    get:
+      tags: [Trips]
+      summary: Chi tiết Trip Request
+      operationId: getTripById
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Trip detail với policyCheckResult và approvalRecords
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      tags: [Trips]
+      summary: Cập nhật Trip Request
+      operationId: updateTrip
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** EMPLOYEE owner.
+        **Điều kiện:** status === DRAFT.
+        Server strip: `status`, `isUrgent`, `requiresLevel2`, `tripDays`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TripUpdateRequest'
+      responses:
+        '200':
+          description: Trip đã cập nhật
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripDetail'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+
+    delete:
+      tags: [Trips]
+      summary: Xóa Trip Request
+      operationId: deleteTrip
+      security:
+        - BearerAuth: []
+      description: Chỉ xóa được khi status === DRAFT.
+      responses:
+        '204':
+          description: Đã xóa
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+
+  # ── Trip Actions ─────────────────────────────────────────────
+  /trips/{tripId}/submit:
+    post:
+      tags: [Trip Actions]
+      summary: Nộp Trip Request
+      operationId: submitTrip
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** EMPLOYEE owner. **Điều kiện:** status === DRAFT.
+        Server chạy PolicyCheckEngine (BR-TR-01, 02, 03, 04), set isUrgent + requiresLevel2.
+      parameters:
+        - $ref: '#/components/parameters/tripId'
+      responses:
+        '200':
+          description: Trip đã submit, kèm kết quả policy check
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  status:
+                    $ref: '#/components/schemas/TripStatus'
+                  isUrgent:
+                    type: boolean
+                  requiresLevel2:
+                    type: boolean
+                  submittedAt:
+                    type: string
+                    format: date-time
+                  policyCheckResult:
+                    $ref: '#/components/schemas/PolicyCheckResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+
+  /trips/{tripId}/approve:
+    post:
+      tags: [Trip Actions]
+      summary: Phê duyệt Trip Request
+      operationId: approveTrip
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:**
+        - MANAGER → Level 1 (khi status = SUBMITTED)
+        - TRAVEL_ADMIN → Level 2 (khi status = PENDING_ADMIN_APPROVAL)
+
+        **BR-TR-04:** Nếu budget > 20M hoặc có violation → PENDING_ADMIN_APPROVAL (cần L2).
+      parameters:
+        - $ref: '#/components/parameters/tripId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comment:
+                  type: string
+                  maxLength: 1000
+                  example: Phê duyệt chuyến công tác
+      responses:
+        '200':
+          description: Trip đã được duyệt
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  status:
+                    $ref: '#/components/schemas/TripStatus'
+                  approvalRecord:
+                    $ref: '#/components/schemas/ApprovalRecord'
+                  approvedAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+
+  /trips/{tripId}/reject:
+    post:
+      tags: [Trip Actions]
+      summary: Từ chối Trip Request
+      operationId: rejectTrip
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** MANAGER (L1), TRAVEL_ADMIN (L2).
+        `comment` là bắt buộc khi reject.
+      parameters:
+        - $ref: '#/components/parameters/tripId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [comment]
+              properties:
+                comment:
+                  type: string
+                  minLength: 10
+                  maxLength: 1000
+                  example: Ngân sách vượt kế hoạch quý, đề nghị điều chỉnh
+      responses:
+        '200':
+          description: Trip đã bị từ chối
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  status:
+                    $ref: '#/components/schemas/TripStatus'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+
+  /trips/{tripId}/close:
+    post:
+      tags: [Trip Actions]
+      summary: Đóng hồ sơ Trip (Finance)
+      operationId: closeTrip
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** FINANCE.
+        **Điều kiện:** `expense.status === APPROVED` (không phải trip.status).
+        Nếu `managerReapprovalRequired = true` thì `managerReapproved` phải là `true` trước.
+        **BR-TR-06:** Trip sau khi CLOSED là immutable hoàn toàn.
+
+        **⚠️ UX vs API (L-05 fix):** Frontend có thể hiển thị nút "Approve & Close" gộp,
+        nhưng phải gọi **tuần tự 2 request**:
+        1. `POST /trips/:id/expense/approve` — chờ `expense.status = APPROVED`
+        2. `POST /trips/:id/close` — chỉ gọi sau khi bước 1 thành công
+
+        Cả `trip.status` và `expense.status` đều chuyển sang `CLOSED` trong 1 transaction.
+      parameters:
+        - $ref: '#/components/parameters/tripId'
+      responses:
+        '200':
+          description: Trip và Expense đã đóng — cả hai immutable (BR-TR-06)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  status:
+                    $ref: '#/components/schemas/TripStatus'
+                  closedAt:
+                    type: string
+                    format: date-time
+                  expense:
+                    type: object
+                    description: Expense cũng đồng thời chuyển sang CLOSED
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      status:
+                        $ref: '#/components/schemas/ExpenseStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+        '422':
+          description: Variance > 10% chưa được Manager re-approve (BR-TR-05)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: EXPENSE_VARIANCE_EXCEEDED
+                message: "Variance 15.3% > 10%. Manager chưa phê duyệt phần vượt chi (BR-TR-05)."
+                requestId: req_abc123
+
+  # ── Itinerary ─────────────────────────────────────────────────
+  /trips/{tripId}/itinerary:
+    parameters:
+      - $ref: '#/components/parameters/tripId'
+
+    get:
+      tags: [Itinerary]
+      summary: Danh sách Itinerary Items
+      operationId: listItineraryItems
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Lịch trình chi tiết
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tripId:
+                    type: string
+                    format: uuid
+                  totalEstimatedCost:
+                    type: integer
+                    description: Tổng chi phí ước tính (VND)
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ItineraryItem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    post:
+      tags: [Itinerary]
+      summary: Thêm Itinerary Item
+      operationId: createItineraryItem
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** EMPLOYEE owner.
+        `isAiGenerated` luôn = false — AI items đến qua `/ai/generate-itinerary`.
+        Bị chặn nếu trip CLOSED (immutableGuard → 409 TRIP_IMMUTABLE).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItineraryItemRequest'
+      responses:
+        '201':
+          description: Item đã tạo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItineraryItem'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/TripImmutable'
+
+  /trips/{tripId}/itinerary/{itemId}:
+    parameters:
+      - $ref: '#/components/parameters/tripId'
+      - $ref: '#/components/parameters/itemId'
+
+    patch:
+      tags: [Itinerary]
+      summary: Cập nhật Itinerary Item
+      operationId: updateItineraryItem
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItineraryItemRequest'
+      responses:
+        '200':
+          description: Item đã cập nhật
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItineraryItem'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/TripImmutable'
+
+    delete:
+      tags: [Itinerary]
+      summary: Xóa Itinerary Item
+      operationId: deleteItineraryItem
+      security:
+        - BearerAuth: []
+      responses:
+        '204':
+          description: Đã xóa
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/TripImmutable'
+
+  # ── Expense ───────────────────────────────────────────────────
+  /trips/{tripId}/expense:
+    parameters:
+      - $ref: '#/components/parameters/tripId'
+
+    get:
+      tags: [Expenses]
+      summary: Chi tiết Expense Claim
+      operationId: getExpense
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** Owner (EMPLOYEE), FINANCE.
+        `variancePct`, `varianceAmount`, `totalActual`, `estimatedBudgetSnapshot` là read-only.
+      responses:
+        '200':
+          description: Expense Claim với items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseClaim'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    post:
+      tags: [Expenses]
+      summary: Tạo Expense Claim (khởi tạo)
+      operationId: createExpense
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** EMPLOYEE owner.
+        **Điều kiện:** trip.status IN (APPROVED, ONGOING) AND chưa có expense.
+        Server tự set `estimatedBudgetSnapshot = trip.estimatedBudget`. Không cần request body.
+      responses:
+        '201':
+          description: Expense Claim tạo thành công với status DRAFT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseClaim'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+
+    patch:
+      tags: [Expenses]
+      summary: Cập nhật justification
+      operationId: updateExpense
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** EMPLOYEE owner. Chỉ `justification` được phép cập nhật.
+        Mọi computed field bị strip.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                justification:
+                  type: string
+                  maxLength: 2000
+                  nullable: true
+      responses:
+        '200':
+          description: Expense đã cập nhật
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseClaim'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+
+  /trips/{tripId}/expense/submit:
+    post:
+      tags: [Expenses]
+      summary: Nộp Expense Claim
+      operationId: submitExpense
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** EMPLOYEE owner. **Điều kiện:** status = DRAFT AND items ≥ 1.
+        **BR-TR-05:**
+        - 0 < variance ≤ 10% → cần justification
+        - variance > 10% → set managerReapprovalRequired = true
+      parameters:
+        - $ref: '#/components/parameters/tripId'
+      responses:
+        '200':
+          description: Expense đã submit với variance được tính
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseClaim'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+        '422':
+          description: Cần justification (variance 0–10%) hoặc không có items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: JUSTIFICATION_REQUIRED
+                message: "Variance 8.24% > 0. Bắt buộc điền lý do vượt chi (BR-TR-05)."
+                requestId: req_abc123
+
+  /trips/{tripId}/expense/approve:
+    post:
+      tags: [Expenses]
+      summary: Finance phê duyệt Expense
+      operationId: approveExpense
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** FINANCE.
+        **Điều kiện:** expense.status = SUBMITTED AND (nếu managerReapprovalRequired thì managerReapproved = true).
+        Response trả về `tripStatus = EXPENSE_APPROVED` để frontend biết enable nút "Đóng hồ sơ".
+      parameters:
+        - $ref: '#/components/parameters/tripId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comment:
+                  type: string
+                  maxLength: 1000
+      responses:
+        '200':
+          description: Expense đã được duyệt — trip chuyển sang EXPENSE_APPROVED
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  status:
+                    $ref: '#/components/schemas/ExpenseStatus'
+                  approvedAt:
+                    type: string
+                    format: date-time
+                  tripStatus:
+                    $ref: '#/components/schemas/TripStatus'
+                    description: Giá trị EXPENSE_APPROVED — frontend dùng để enable nút Close
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+        '422':
+          description: Variance > 10%, Manager chưa re-approve
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /trips/{tripId}/expense/reject:
+    post:
+      tags: [Expenses]
+      summary: Finance từ chối Expense
+      operationId: rejectExpense
+      security:
+        - BearerAuth: []
+      description: Employee bổ sung items rồi submit lại.
+      parameters:
+        - $ref: '#/components/parameters/tripId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [comment]
+              properties:
+                comment:
+                  type: string
+                  minLength: 10
+                  maxLength: 1000
+      responses:
+        '200':
+          description: Expense bị từ chối
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  status:
+                    $ref: '#/components/schemas/ExpenseStatus'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+
+  /trips/{tripId}/expense/reapprove:
+    post:
+      tags: [Expenses]
+      summary: Manager re-approve phần vượt chi
+      operationId: reapproveExpense
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** MANAGER (manager của employee).
+        **BR-TR-05:** Chỉ gọi khi managerReapprovalRequired = true.
+      parameters:
+        - $ref: '#/components/parameters/tripId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  $ref: '#/components/schemas/ApprovalAction'
+                comment:
+                  type: string
+                  maxLength: 1000
+                  description: Bắt buộc khi action = REJECTED
+      responses:
+        '200':
+          description: Re-approval thực hiện
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  managerReapproved:
+                    type: boolean
+                  managerReapproverId:
+                    type: string
+                    format: uuid
+                  managerReapprovedAt:
+                    type: string
+                    format: date-time
+                  status:
+                    $ref: '#/components/schemas/ExpenseStatus'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+
+  # ── Expense Items ─────────────────────────────────────────────
+  /trips/{tripId}/expense/items:
+    parameters:
+      - $ref: '#/components/parameters/tripId'
+
+    post:
+      tags: [Expense Items]
+      summary: Thêm khoản chi
+      operationId: createExpenseItem
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** EMPLOYEE owner.
+        Sau khi insert, server tự cập nhật `expenses.totalActual`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpenseItemRequest'
+      responses:
+        '201':
+          description: Khoản chi đã thêm
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseItem'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+
+  /trips/{tripId}/expense/items/{itemId}:
+    parameters:
+      - $ref: '#/components/parameters/tripId'
+      - $ref: '#/components/parameters/itemId'
+
+    patch:
+      tags: [Expense Items]
+      summary: Cập nhật khoản chi
+      operationId: updateExpenseItem
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpenseItemRequest'
+      responses:
+        '200':
+          description: Khoản chi đã cập nhật
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseItem'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+
+    delete:
+      tags: [Expense Items]
+      summary: Xóa khoản chi
+      operationId: deleteExpenseItem
+      security:
+        - BearerAuth: []
+      responses:
+        '204':
+          description: Đã xóa
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+
+  # ── AI ────────────────────────────────────────────────────────
+  /ai/generate-itinerary:
+    post:
+      tags: [AI]
+      summary: Tạo Itinerary Draft bằng AI
+      operationId: generateItinerary
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** EMPLOYEE only.
+        **BR-TR-07 Guardrail:** Server kiểm tra `totalEstimatedCost ≤ budget` trước khi trả về.
+        Nếu AI vượt budget: retry tối đa 2 lần. Vẫn vượt → 422.
+        **Timeout:** 8 giây server-side (target ≤ 5s đến client theo NFR-TR-02).
+        Gemini API key **không bao giờ** expose ra client.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tripId, destination, days, budget]
+              properties:
+                tripId:
+                  type: string
+                  format: uuid
+                  description: Validate trip thuộc về user
+                destination:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                  example: Đà Nẵng
+                days:
+                  type: integer
+                  minimum: 1
+                  maximum: 30
+                  example: 3
+                budget:
+                  type: integer
+                  minimum: 1
+                  description: VND nguyên — budget cap cho AI
+                  example: 5000000
+                preferences:
+                  type: string
+                  maxLength: 500
+                  nullable: true
+                  example: Ưu tiên họp buổi sáng, tham quan buổi chiều
+      responses:
+        '200':
+          description: Itinerary draft từ AI (guardrail pass)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  destination:
+                    type: string
+                  days:
+                    type: integer
+                  totalEstimatedCost:
+                    type: integer
+                    description: Tổng chi phí AI ước tính (VND) — đã pass guardrail ≤ budget
+                  budgetCap:
+                    type: integer
+                  guardrailPass:
+                    type: boolean
+                    example: true
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        dayNumber:
+                          type: integer
+                        itemDate:
+                          type: string
+                          format: date
+                        timeSlot:
+                          $ref: '#/components/schemas/TimeSlot'
+                        location:
+                          type: string
+                        activity:
+                          type: string
+                        category:
+                          $ref: '#/components/schemas/ItineraryCategory'
+                        estimatedCost:
+                          type: integer
+                        notes:
+                          type: string
+                          nullable: true
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          description: AI không thể sinh itinerary trong budget sau 2 lần retry (BR-TR-07)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: AI_BUDGET_GUARDRAIL_FAILED
+                message: Không thể tạo lịch trình trong ngân sách 5.000.000 VNĐ. Vui lòng điều chỉnh ngân sách hoặc số ngày.
+                requestId: req_abc123
+        '500':
+          description: Gemini API timeout hoặc lỗi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ── Notifications ─────────────────────────────────────────────
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: Danh sách notifications
+      operationId: listNotifications
+      security:
+        - BearerAuth: []
+      description: Chỉ trả về notifications của user hiện tại.
+      parameters:
+        - name: isRead
+          in: query
+          schema:
+            type: boolean
+        - $ref: '#/components/parameters/pageParam'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        '200':
+          description: Danh sách notifications
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Notification'
+                  unreadCount:
+                    type: integer
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /notifications/read-all:
+    patch:
+      tags: [Notifications]
+      summary: Đánh dấu tất cả đã đọc
+      operationId: markAllNotificationsRead
+      security:
+        - BearerAuth: []
+      description: Route này phải đứng trước `/notifications/{notificationId}/read` trong router để không bị shadow.
+      responses:
+        '200':
+          description: Số notifications đã update
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updatedCount:
+                    type: integer
+                    example: 5
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /notifications/{notificationId}/read:
+    patch:
+      tags: [Notifications]
+      summary: Đánh dấu một notification đã đọc
+      operationId: markNotificationRead
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/notificationId'
+      responses:
+        '200':
+          description: Notification đã đọc
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  isRead:
+                    type: boolean
+                    example: true
+                  readAt:
+                    type: string
+                    format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /notifications/stream:
+    get:
+      tags: [Notifications]
+      summary: SSE Stream — Real-time notifications
+      operationId: notificationStream
+      description: |
+        **Protocol:** Server-Sent Events (SSE).
+        Token gửi qua query param `?token=<accessToken>` vì EventSource API không hỗ trợ custom header.
+        Server gửi `ping` event mỗi 30 giây. Client tự reconnect khi mất kết nối.
+
+        **Event format:**
+        ```
+        event: notification
+        data: {"type":"TRIP_APPROVED","tripId":"uuid","message":"...","timestamp":"..."}
+
+        event: ping
+        data: {"timestamp":"..."}
+        ```
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: JWT Access Token (vì EventSource không support Authorization header)
+      responses:
+        '200':
+          description: SSE stream
+          headers:
+            Content-Type:
+              schema:
+                type: string
+                example: text/event-stream
+            Cache-Control:
+              schema:
+                type: string
+                example: no-cache
+            Connection:
+              schema:
+                type: string
+                example: keep-alive
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: |
+                  event: notification
+                  data: {"type":"TRIP_APPROVED","message":"Chuyến công tác đã được phê duyệt"}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ── Dashboard ─────────────────────────────────────────────────
+  /dashboard:
+    get:
+      tags: [Dashboard]
+      summary: Dashboard stats
+      operationId: getDashboard
+      security:
+        - BearerAuth: []
+      description: Response shape khác nhau theo role — filtered server-side.
+      responses:
+        '200':
+          description: Dashboard data theo role
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Shape khác nhau theo req.user.role
+              examples:
+                employee:
+                  summary: EMPLOYEE view
+                  value:
+                    role: EMPLOYEE
+                    myTrips:
+                      total: 8
+                      byStatus:
+                        DRAFT: 1
+                        SUBMITTED: 2
+                        APPROVED: 3
+                        CLOSED: 2
+                      recentTrips: []
+                    myExpenses:
+                      pendingSubmission: 1
+                      pendingApproval: 0
+                    notifications:
+                      unreadCount: 3
+                manager:
+                  summary: MANAGER view
+                  value:
+                    role: MANAGER
+                    pendingApprovals:
+                      count: 4
+                      trips: []
+                    teamTrips:
+                      total: 23
+                      byStatus:
+                        APPROVED: 10
+                        ONGOING: 3
+                        CLOSED: 8
+                        REJECTED: 2
+                    notifications:
+                      unreadCount: 2
+                finance:
+                  summary: FINANCE view
+                  value:
+                    role: FINANCE
+                    pendingExpenses:
+                      count: 6
+                      expenses: []
+                    pendingClose:
+                      count: 2
+                      trips: []
+                    notifications:
+                      unreadCount: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ── PDF Export ────────────────────────────────────────────────
+  /trips/{tripId}/export-pdf:
+    get:
+      tags: [PDF Export]
+      summary: Xuất Trip Report PDF
+      operationId: exportTripPdf
+      security:
+        - BearerAuth: []
+      description: |
+        **Roles:** Owner (EMPLOYEE), FINANCE.
+        **Điều kiện:** trip.status IN (APPROVED, ONGOING, EXPENSE_SUBMITTED, EXPENSE_APPROVED, CLOSED).
+        Nội dung: thông tin nhân viên, lịch trình, bảng đối chiếu ngân sách, lịch sử phê duyệt.
+      parameters:
+        - $ref: '#/components/parameters/tripId'
+      responses:
+        '200':
+          description: PDF file
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: attachment; filename="trip-report-3fa85f64.pdf"
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidState'
+
+  # ── Health ────────────────────────────────────────────────────
+  /health:
+    get:
+      tags: [System]
+      summary: Health Check
+      operationId: healthCheck
+      description: Public endpoint — không cần auth.
+      responses:
+        '200':
+          description: Server đang hoạt động bình thường
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  version:
+                    type: string
+                    example: 1.0.0
+                  timestamp:
+                    type: string
+                    format: date-time
+                  database:
+                    type: string
+                    example: connected
+
+# ─────────────────────────────────────────────────────────────
+# TAGS
+# ─────────────────────────────────────────────────────────────
+tags:
+  - name: Auth
+    description: Đăng nhập, refresh token, đăng xuất
+  - name: Trips
+    description: CRUD Trip Requests
+  - name: Trip Actions
+    description: State transitions — submit, approve, reject, close
+  - name: Itinerary
+    description: Quản lý lịch trình chuyến công tác
+  - name: Expenses
+    description: Quản lý Expense Claim (header)
+  - name: Expense Items
+    description: Quản lý từng khoản chi tiết
+  - name: AI
+    description: AI sinh lịch trình với budget guardrail (BR-TR-07)
+  - name: Notifications
+    description: In-app notifications và SSE stream
+  - name: Dashboard
+    description: Dashboard stats theo role
+  - name: PDF Export
+    description: Xuất báo cáo PDF
+  - name: System
+    description: Health check

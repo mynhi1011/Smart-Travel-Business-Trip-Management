@@ -1,0 +1,535 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1780 1450" width="100%" height="100%" style="background-color: #0b1120; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  <defs>
+    <!-- Card Shadow Filter -->
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="8" stdDeviation="6" flood-color="#000000" flood-opacity="0.5" />
+    </filter>
+
+    <!-- Markers for Relations -->
+    <marker id="arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#38bdf8" />
+    </marker>
+    <marker id="circle" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6">
+      <circle cx="5" cy="5" r="3" fill="#0b1120" stroke="#38bdf8" stroke-width="1.8" />
+    </marker>
+    
+    <style>
+      .entity-title { font-size: 13.5px; font-weight: 700; fill: #ffffff; letter-spacing: 0.5px; }
+      .field-name { font-size: 11px; fill: #e2e8f0; }
+      .field-type { font-size: 11px; fill: #94a3b8; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+      .key-pk { font-size: 10px; font-weight: 700; fill: #fbbf24; }
+      .key-fk { font-size: 10px; font-weight: 700; fill: #38bdf8; }
+      .key-uk { font-size: 10px; font-weight: 700; fill: #a78bfa; }
+      .rel-line { fill: none; stroke: #38bdf8; stroke-width: 1.8; stroke-dasharray: 5,5; }
+      .rel-line-solid { fill: none; stroke: #38bdf8; stroke-width: 1.8; }
+      .rel-bg { fill: #0b1120; rx: 4; stroke: #1e293b; stroke-width: 1; }
+      .rel-text { font-size: 10px; fill: #7dd3fc; font-weight: 600; }
+    </style>
+  </defs>
+
+  <!-- ================= HEADER ================= -->
+  <text x="70" y="45" fill="#f8fafc" font-size="20" font-weight="800">SMART TRAVEL &amp; BUSINESS TRIP MANAGEMENT</text>
+  <text x="70" y="68" fill="#38bdf8" font-size="12" font-weight="600">PHYSICAL ERD — COMPLETE NON-OVERLAPPING ROUTING</text>
+
+  <!-- ================= COLUMN 1 (X: 70 -> 360) ================= -->
+
+  <!-- ENTITY: users -->
+  <g transform="translate(70, 100)" filter="url(#shadow)">
+    <rect width="290" height="270" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5" />
+    <path d="M 0 0 h 290 v 35 h -290 z" fill="#0284c7" rx="8" />
+    <rect y="25" width="290" height="10" fill="#0284c7" />
+    <text x="15" y="23" class="entity-title">users</text>
+
+    <text x="15" y="55" class="key-pk">PK</text>
+    <text x="42" y="55" class="field-name">id</text>
+    <text x="275" y="55" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="15" y="75" class="key-uk">UK</text>
+    <text x="42" y="75" class="field-name">email</text>
+    <text x="275" y="75" class="field-type" text-anchor="end">varchar(255)</text>
+
+    <text x="42" y="95" class="field-name">name</text>
+    <text x="275" y="95" class="field-type" text-anchor="end">varchar(255)</text>
+
+    <text x="42" y="115" class="field-name">password_hash</text>
+    <text x="275" y="115" class="field-type" text-anchor="end">varchar(255)</text>
+
+    <text x="42" y="135" class="field-name">role</text>
+    <text x="275" y="135" class="field-type" text-anchor="end">user_role</text>
+
+    <text x="42" y="155" class="field-name">job_grade</text>
+    <text x="275" y="155" class="field-type" text-anchor="end">job_grade</text>
+
+    <text x="42" y="175" class="field-name">department</text>
+    <text x="275" y="175" class="field-type" text-anchor="end">varchar(100)</text>
+
+    <text x="15" y="195" class="key-fk">FK</text>
+    <text x="42" y="195" class="field-name">manager_id</text>
+    <text x="275" y="195" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="42" y="215" class="field-name">is_active</text>
+    <text x="275" y="215" class="field-type" text-anchor="end">boolean</text>
+
+    <text x="42" y="235" class="field-name">created_at</text>
+    <text x="275" y="235" class="field-type" text-anchor="end">timestamptz</text>
+
+    <text x="42" y="255" class="field-name">updated_at</text>
+    <text x="275" y="255" class="field-type" text-anchor="end">timestamptz</text>
+  </g>
+
+  <!-- ENTITY: refresh_tokens -->
+  <g transform="translate(70, 440)" filter="url(#shadow)">
+    <rect width="290" height="180" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5" />
+    <path d="M 0 0 h 290 v 35 h -290 z" fill="#475569" rx="8" />
+    <rect y="25" width="290" height="10" fill="#475569" />
+    <text x="15" y="23" class="entity-title">refresh_tokens</text>
+
+    <text x="15" y="55" class="key-pk">PK</text>
+    <text x="42" y="55" class="field-name">id</text>
+    <text x="275" y="55" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="15" y="75" class="key-fk">FK</text>
+    <text x="42" y="75" class="field-name">user_id</text>
+    <text x="275" y="75" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="15" y="95" class="key-uk">UK</text>
+    <text x="42" y="95" class="field-name">token_hash</text>
+    <text x="275" y="95" class="field-type" text-anchor="end">varchar(500)</text>
+
+    <text x="42" y="115" class="field-name">expires_at</text>
+    <text x="275" y="115" class="field-type" text-anchor="end">timestamptz</text>
+
+    <text x="42" y="135" class="field-name">is_revoked</text>
+    <text x="275" y="135" class="field-type" text-anchor="end">boolean</text>
+
+    <text x="42" y="155" class="field-name">ip_address</text>
+    <text x="275" y="155" class="field-type" text-anchor="end">varchar(45)</text>
+
+    <text x="42" y="175" class="field-name">created_at</text>
+    <text x="275" y="175" class="field-type" text-anchor="end">timestamptz</text>
+  </g>
+
+  <!-- ENTITY: notifications -->
+  <g transform="translate(70, 700)" filter="url(#shadow)">
+    <rect width="290" height="230" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5" />
+    <path d="M 0 0 h 290 v 35 h -290 z" fill="#475569" rx="8" />
+    <rect y="25" width="290" height="10" fill="#475569" />
+    <text x="15" y="23" class="entity-title">notifications</text>
+
+    <text x="15" y="55" class="key-pk">PK</text>
+    <text x="42" y="55" class="field-name">id</text>
+    <text x="275" y="55" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="15" y="75" class="key-fk">FK</text>
+    <text x="42" y="75" class="field-name">recipient_id</text>
+    <text x="275" y="75" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="42" y="95" class="field-name">type</text>
+    <text x="275" y="95" class="field-type" text-anchor="end">notification_type</text>
+
+    <text x="42" y="115" class="field-name">message</text>
+    <text x="275" y="115" class="field-type" text-anchor="end">text</text>
+
+    <text x="42" y="135" class="field-name">reference_id</text>
+    <text x="275" y="135" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="42" y="155" class="field-name">reference_type</text>
+    <text x="275" y="155" class="field-type" text-anchor="end">varchar(50)</text>
+
+    <text x="42" y="175" class="field-name">is_read</text>
+    <text x="275" y="175" class="field-type" text-anchor="end">boolean</text>
+
+    <text x="42" y="195" class="field-name">read_at</text>
+    <text x="275" y="195" class="field-type" text-anchor="end">timestamptz</text>
+
+    <text x="42" y="215" class="field-name">created_at</text>
+    <text x="275" y="215" class="field-type" text-anchor="end">timestamptz</text>
+  </g>
+
+  <!-- ENTITY: audit_logs -->
+  <g transform="translate(70, 1010)" filter="url(#shadow)">
+    <rect width="290" height="230" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5" />
+    <path d="M 0 0 h 290 v 35 h -290 z" fill="#e11d48" rx="8" />
+    <rect y="25" width="290" height="10" fill="#e11d48" />
+    <text x="15" y="23" class="entity-title">audit_logs (Immutable Log)</text>
+
+    <text x="15" y="55" class="key-pk">PK</text>
+    <text x="42" y="55" class="field-name">id</text>
+    <text x="275" y="55" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="15" y="75" class="key-fk">FK</text>
+    <text x="42" y="75" class="field-name">user_id</text>
+    <text x="275" y="75" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="42" y="95" class="field-name">entity_type</text>
+    <text x="275" y="95" class="field-type" text-anchor="end">audit_entity_type</text>
+
+    <text x="42" y="115" class="field-name">entity_id</text>
+    <text x="275" y="115" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="42" y="135" class="field-name">action</text>
+    <text x="275" y="135" class="field-type" text-anchor="end">varchar(100)</text>
+
+    <text x="42" y="155" class="field-name">previous_state / new_state</text>
+    <text x="275" y="155" class="field-type" text-anchor="end">varchar(100)</text>
+
+    <text x="42" y="175" class="field-name">metadata</text>
+    <text x="275" y="175" class="field-type" text-anchor="end">jsonb</text>
+
+    <text x="42" y="195" class="field-name">ip_address</text>
+    <text x="275" y="195" class="field-type" text-anchor="end">varchar(45)</text>
+
+    <text x="42" y="215" class="field-name">timestamp (no update)</text>
+    <text x="275" y="215" class="field-type" text-anchor="end">timestamptz</text>
+  </g>
+
+  <!-- ================= COLUMN 2 (X: 520 -> 840) ================= -->
+
+  <!-- ENTITY: trips -->
+  <g transform="translate(520, 100)" filter="url(#shadow)">
+    <rect width="320" height="510" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5" />
+    <path d="M 0 0 h 320 v 35 h -320 z" fill="#0d9488" rx="8" />
+    <rect y="25" width="320" height="10" fill="#0d9488" />
+    <text x="15" y="23" class="entity-title">trips (Core Entity)</text>
+
+    <text x="15" y="55" class="key-pk">PK</text>
+    <text x="42" y="55" class="field-name">id</text>
+    <text x="305" y="55" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="15" y="75" class="key-fk">FK</text>
+    <text x="42" y="75" class="field-name">employee_id</text>
+    <text x="305" y="75" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="42" y="95" class="field-name">origin</text>
+    <text x="305" y="95" class="field-type" text-anchor="end">varchar(200)</text>
+
+    <text x="42" y="115" class="field-name">destination</text>
+    <text x="305" y="115" class="field-type" text-anchor="end">varchar(200)</text>
+
+    <text x="42" y="135" class="field-name">destination_type</text>
+    <text x="305" y="135" class="field-type" text-anchor="end">destination_type</text>
+
+    <text x="42" y="155" class="field-name">departure_date</text>
+    <text x="305" y="155" class="field-type" text-anchor="end">date</text>
+
+    <text x="42" y="175" class="field-name">return_date</text>
+    <text x="305" y="175" class="field-type" text-anchor="end">date</text>
+
+    <text x="42" y="195" class="field-name">trip_days (generated)</text>
+    <text x="305" y="195" class="field-type" text-anchor="end">int</text>
+
+    <text x="42" y="215" class="field-name">purpose</text>
+    <text x="305" y="215" class="field-type" text-anchor="end">text</text>
+
+    <text x="42" y="235" class="field-name">estimated_budget</text>
+    <text x="305" y="235" class="field-type" text-anchor="end">bigint</text>
+
+    <text x="42" y="255" class="field-name">hotel_cost_per_night</text>
+    <text x="305" y="255" class="field-type" text-anchor="end">bigint</text>
+
+    <text x="42" y="275" class="field-name">hotel_nights</text>
+    <text x="305" y="275" class="field-type" text-anchor="end">int</text>
+
+    <text x="42" y="295" class="field-name">per_diem_budget</text>
+    <text x="305" y="295" class="field-type" text-anchor="end">bigint</text>
+
+    <text x="42" y="315" class="field-name">transport_budget</text>
+    <text x="305" y="315" class="field-type" text-anchor="end">bigint</text>
+
+    <text x="42" y="335" class="field-name">other_budget</text>
+    <text x="305" y="335" class="field-type" text-anchor="end">bigint</text>
+
+    <text x="42" y="355" class="field-name">status</text>
+    <text x="305" y="355" class="field-type" text-anchor="end">trip_status</text>
+
+    <text x="42" y="375" class="field-name">is_urgent</text>
+    <text x="305" y="375" class="field-type" text-anchor="end">boolean</text>
+
+    <text x="42" y="395" class="field-name">urgency_reason</text>
+    <text x="305" y="395" class="field-type" text-anchor="end">text</text>
+
+    <text x="42" y="415" class="field-name">requires_level2</text>
+    <text x="305" y="415" class="field-type" text-anchor="end">boolean</text>
+
+    <text x="42" y="435" class="field-name">submitted_at</text>
+    <text x="305" y="435" class="field-type" text-anchor="end">timestamptz</text>
+
+    <text x="42" y="455" class="field-name">approved_at</text>
+    <text x="305" y="455" class="field-type" text-anchor="end">timestamptz</text>
+
+    <text x="42" y="475" class="field-name">closed_at</text>
+    <text x="305" y="475" class="field-type" text-anchor="end">timestamptz</text>
+
+    <text x="42" y="495" class="field-name">created_at / updated_at</text>
+    <text x="305" y="495" class="field-type" text-anchor="end">timestamptz</text>
+  </g>
+
+  <!-- ENTITY: expenses -->
+  <g transform="translate(520, 680)" filter="url(#shadow)">
+    <rect width="320" height="330" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5" />
+    <path d="M 0 0 h 320 v 35 h -320 z" fill="#047857" rx="8" />
+    <rect y="25" width="320" height="10" fill="#047857" />
+    <text x="15" y="23" class="entity-title">expenses (1:1 with Trip)</text>
+
+    <text x="15" y="55" class="key-pk">PK</text>
+    <text x="42" y="55" class="field-name">id</text>
+    <text x="305" y="55" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="15" y="75" class="key-uk">UK/FK</text>
+    <text x="56" y="75" class="field-name">trip_id</text>
+    <text x="305" y="75" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="42" y="95" class="field-name">total_actual</text>
+    <text x="305" y="95" class="field-type" text-anchor="end">bigint</text>
+
+    <text x="42" y="115" class="field-name">estimated_budget_snapshot</text>
+    <text x="305" y="115" class="field-type" text-anchor="end">bigint</text>
+
+    <text x="42" y="135" class="field-name">variance_pct</text>
+    <text x="305" y="135" class="field-type" text-anchor="end">numeric(6,2)</text>
+
+    <text x="42" y="155" class="field-name">variance_amount</text>
+    <text x="305" y="155" class="field-type" text-anchor="end">bigint</text>
+
+    <text x="42" y="175" class="field-name">justification</text>
+    <text x="305" y="175" class="field-type" text-anchor="end">text</text>
+
+    <text x="42" y="195" class="field-name">manager_reapproval_req</text>
+    <text x="305" y="195" class="field-type" text-anchor="end">boolean</text>
+
+    <text x="42" y="215" class="field-name">manager_reapproved</text>
+    <text x="305" y="215" class="field-type" text-anchor="end">boolean</text>
+
+    <text x="15" y="235" class="key-fk">FK</text>
+    <text x="42" y="235" class="field-name">manager_reapprover_id</text>
+    <text x="305" y="235" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="42" y="255" class="field-name">manager_reapproved_at</text>
+    <text x="305" y="255" class="field-type" text-anchor="end">timestamptz</text>
+
+    <text x="42" y="275" class="field-name">status</text>
+    <text x="305" y="275" class="field-type" text-anchor="end">expense_status</text>
+
+    <text x="42" y="295" class="field-name">submitted_at / approved_at</text>
+    <text x="305" y="295" class="field-type" text-anchor="end">timestamptz</text>
+
+    <text x="42" y="315" class="field-name">created_at / updated_at</text>
+    <text x="305" y="315" class="field-type" text-anchor="end">timestamptz</text>
+  </g>
+
+  <!-- ================= COLUMN 3 (X: 980 -> 1280) ================= -->
+
+  <!-- ENTITY: policy_check_results -->
+  <g transform="translate(980, 100)" filter="url(#shadow)">
+    <rect width="300" height="180" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5" />
+    <path d="M 0 0 h 300 v 35 h -300 z" fill="#6366f1" rx="8" />
+    <rect y="25" width="300" height="10" fill="#6366f1" />
+    <text x="15" y="23" class="entity-title">policy_check_results (1:1 Snapshot)</text>
+
+    <text x="15" y="55" class="key-pk">PK</text>
+    <text x="42" y="55" class="field-name">id</text>
+    <text x="285" y="55" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="15" y="75" class="key-uk">UK/FK</text>
+    <text x="56" y="75" class="field-name">trip_id</text>
+    <text x="285" y="75" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="42" y="95" class="field-name">passed</text>
+    <text x="285" y="95" class="field-type" text-anchor="end">boolean</text>
+
+    <text x="42" y="115" class="field-name">violations</text>
+    <text x="285" y="115" class="field-type" text-anchor="end">jsonb</text>
+
+    <text x="42" y="135" class="field-name">violation_count</text>
+    <text x="285" y="135" class="field-type" text-anchor="end">int</text>
+
+    <text x="42" y="155" class="field-name">requires_level2_approval</text>
+    <text x="285" y="155" class="field-type" text-anchor="end">boolean</text>
+
+    <text x="42" y="175" class="field-name">checked_at</text>
+    <text x="285" y="175" class="field-type" text-anchor="end">timestamptz</text>
+  </g>
+
+  <!-- ENTITY: itinerary_items -->
+  <g transform="translate(980, 330)" filter="url(#shadow)">
+    <rect width="300" height="290" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5" />
+    <path d="M 0 0 h 300 v 35 h -300 z" fill="#475569" rx="8" />
+    <rect y="25" width="300" height="10" fill="#475569" />
+    <text x="15" y="23" class="entity-title">itinerary_items</text>
+
+    <text x="15" y="55" class="key-pk">PK</text>
+    <text x="42" y="55" class="field-name">id</text>
+    <text x="285" y="55" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="15" y="75" class="key-fk">FK</text>
+    <text x="42" y="75" class="field-name">trip_id</text>
+    <text x="285" y="75" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="42" y="95" class="field-name">item_date</text>
+    <text x="285" y="95" class="field-type" text-anchor="end">date</text>
+
+    <text x="42" y="115" class="field-name">day_number</text>
+    <text x="285" y="115" class="field-type" text-anchor="end">int</text>
+
+    <text x="42" y="135" class="field-name">time_slot</text>
+    <text x="285" y="135" class="field-type" text-anchor="end">time_slot</text>
+
+    <text x="42" y="155" class="field-name">location</text>
+    <text x="285" y="155" class="field-type" text-anchor="end">varchar(300)</text>
+
+    <text x="42" y="175" class="field-name">activity</text>
+    <text x="285" y="175" class="field-type" text-anchor="end">text</text>
+
+    <text x="42" y="195" class="field-name">category</text>
+    <text x="285" y="195" class="field-type" text-anchor="end">itinerary_category</text>
+
+    <text x="42" y="215" class="field-name">estimated_cost</text>
+    <text x="285" y="215" class="field-type" text-anchor="end">bigint</text>
+
+    <text x="42" y="235" class="field-name">is_ai_generated</text>
+    <text x="285" y="235" class="field-type" text-anchor="end">boolean</text>
+
+    <text x="42" y="255" class="field-name">sort_order</text>
+    <text x="285" y="255" class="field-type" text-anchor="end">int</text>
+
+    <text x="42" y="275" class="field-name">created_at / updated_at</text>
+    <text x="285" y="275" class="field-type" text-anchor="end">timestamptz</text>
+  </g>
+
+  <!-- ENTITY: approval_records -->
+  <g transform="translate(980, 680)" filter="url(#shadow)">
+    <rect width="300" height="230" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5" />
+    <path d="M 0 0 h 300 v 35 h -300 z" fill="#b45309" rx="8" />
+    <rect y="25" width="300" height="10" fill="#b45309" />
+    <text x="15" y="23" class="entity-title">approval_records</text>
+
+    <text x="15" y="55" class="key-pk">PK</text>
+    <text x="42" y="55" class="field-name">id</text>
+    <text x="285" y="55" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="15" y="75" class="key-fk">FK</text>
+    <text x="42" y="75" class="field-name">trip_id</text>
+    <text x="285" y="75" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="15" y="95" class="key-fk">FK</text>
+    <text x="42" y="95" class="field-name">approver_id</text>
+    <text x="285" y="95" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="42" y="115" class="field-name">approval_level</text>
+    <text x="285" y="115" class="field-type" text-anchor="end">approval_level</text>
+
+    <text x="42" y="135" class="field-name">action</text>
+    <text x="285" y="135" class="field-type" text-anchor="end">approval_action</text>
+
+    <text x="42" y="155" class="field-name">comment</text>
+    <text x="285" y="155" class="field-type" text-anchor="end">text</text>
+
+    <text x="42" y="175" class="field-name">budget_snapshot</text>
+    <text x="285" y="175" class="field-type" text-anchor="end">bigint</text>
+
+    <text x="42" y="195" class="field-name">had_violations_snapshot</text>
+    <text x="285" y="195" class="field-type" text-anchor="end">boolean</text>
+
+    <text x="42" y="215" class="field-name">acted_at</text>
+    <text x="285" y="215" class="field-type" text-anchor="end">timestamptz</text>
+  </g>
+
+  <!-- ================= COLUMN 4 (X: 1400 -> 1690) ================= -->
+
+  <!-- ENTITY: expense_items -->
+  <g transform="translate(1400, 680)" filter="url(#shadow)">
+    <rect width="290" height="210" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5" />
+    <path d="M 0 0 h 290 v 35 h -290 z" fill="#475569" rx="8" />
+    <rect y="25" width="290" height="10" fill="#475569" />
+    <text x="15" y="23" class="entity-title">expense_items</text>
+
+    <text x="15" y="55" class="key-pk">PK</text>
+    <text x="42" y="55" class="field-name">id</text>
+    <text x="275" y="55" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="15" y="75" class="key-fk">FK</text>
+    <text x="42" y="75" class="field-name">expense_id</text>
+    <text x="275" y="75" class="field-type" text-anchor="end">uuid</text>
+
+    <text x="42" y="95" class="field-name">expense_date</text>
+    <text x="275" y="95" class="field-type" text-anchor="end">date</text>
+
+    <text x="42" y="115" class="field-name">category</text>
+    <text x="275" y="115" class="field-type" text-anchor="end">expense_category</text>
+
+    <text x="42" y="135" class="field-name">amount</text>
+    <text x="275" y="135" class="field-type" text-anchor="end">bigint</text>
+
+    <text x="42" y="155" class="field-name">description</text>
+    <text x="275" y="155" class="field-type" text-anchor="end">text</text>
+
+    <text x="42" y="175" class="field-name">receipt_url</text>
+    <text x="275" y="175" class="field-type" text-anchor="end">varchar(500)</text>
+
+    <text x="42" y="195" class="field-name">created_at</text>
+    <text x="275" y="195" class="field-type" text-anchor="end">timestamptz</text>
+  </g>
+
+  <!-- ================= 100% NON-OVERLAPPING CLEAR RELATIONSHIP LINES ================= -->
+
+  <!-- 1. users -> users (Self FK: manager_id) [Left corridor at X=30] -->
+  <path d="M 70 160 L 30 160 L 30 290 L 70 290" class="rel-line" marker-start="url(#circle)" marker-end="url(#arrow)" />
+  <rect x="12" y="215" width="36" height="18" class="rel-bg" />
+  <text x="30" y="228" class="rel-text" text-anchor="middle">1 : N</text>
+
+  <!-- 2. users -> refresh_tokens [Left corridor at X=48] -->
+  <path d="M 70 230 L 48 230 L 48 510 L 70 510" class="rel-line-solid" marker-start="url(#circle)" marker-end="url(#arrow)" />
+  <rect x="30" y="360" width="36" height="18" class="rel-bg" />
+  <text x="48" y="373" class="rel-text" text-anchor="middle">1 : N</text>
+
+  <!-- 3. users -> notifications [Left outer corridor at X=20] -->
+  <path d="M 70 260 L 20 260 L 20 770 L 70 770" class="rel-line" marker-start="url(#circle)" marker-end="url(#arrow)" />
+  <rect x="3" y="560" width="35" height="18" class="rel-bg" />
+  <text x="20" y="573" class="rel-text" text-anchor="middle">1 : N</text>
+
+  <!-- 4. users -> audit_logs [Leftmost outer corridor at X=0] -->
+  <path d="M 70 310 L 2 310 L 2 1080 L 70 1080" class="rel-line" marker-start="url(#circle)" marker-end="url(#arrow)" />
+  <rect x="-15" y="850" width="34" height="18" class="rel-bg" />
+  <text x="2" y="863" class="rel-text" text-anchor="middle">1 : N</text>
+
+  <!-- 5. users -> trips (Employee FK) [Channel between Col 1 & 2 at Y=175] -->
+  <path d="M 360 175 L 520 175" class="rel-line-solid" marker-start="url(#circle)" marker-end="url(#arrow)" />
+  <rect x="400" y="166" width="80" height="18" class="rel-bg" />
+  <text x="440" y="179" class="rel-text" text-anchor="middle">1 : N (employee)</text>
+
+  <!-- 6. users -> expenses (Reapprover FK) [Channel between Col 1 & 2 at X=440] -->
+  <path d="M 360 340 L 440 340 L 440 915 L 520 915" class="rel-line" marker-start="url(#circle)" marker-end="url(#arrow)" />
+  <rect x="385" y="640" width="110" height="18" class="rel-bg" />
+  <text x="440" y="653" class="rel-text" text-anchor="middle">0..1 : N (reapprover)</text>
+
+  <!-- 7. trips -> policy_check_results (1:1) [Channel between Col 2 & 3 at Y=175] -->
+  <path d="M 840 175 L 980 175" class="rel-line-solid" marker-start="url(#circle)" marker-end="url(#arrow)" />
+  <rect x="880" y="166" width="60" height="18" class="rel-bg" />
+  <text x="910" y="179" class="rel-text" text-anchor="middle">1 : 1 (trip)</text>
+
+  <!-- 8. trips -> itinerary_items (1:N) [Channel between Col 2 & 3 at Y=405] -->
+  <path d="M 840 405 L 980 405" class="rel-line-solid" marker-start="url(#circle)" marker-end="url(#arrow)" />
+  <rect x="880" y="396" width="60" height="18" class="rel-bg" />
+  <text x="910" y="409" class="rel-text" text-anchor="middle">1 : N (trip)</text>
+
+  <!-- 9. trips -> approval_records (1:N) [Clear corridor between Col 2 & 3 at X=910] -->
+  <path d="M 840 550 L 910 550 L 910 755 L 980 755" class="rel-line-solid" marker-start="url(#circle)" marker-end="url(#arrow)" />
+  <rect x="875" y="660" width="70" height="18" class="rel-bg" />
+  <text x="910" y="673" class="rel-text" text-anchor="middle">1 : N (trip)</text>
+
+  <!-- 10. trips -> expenses (1:1) [Direct vertical gap at X=680 between Y=610 and Y=680] -->
+  <path d="M 680 610 L 680 680" class="rel-line-solid" marker-start="url(#circle)" marker-end="url(#arrow)" />
+  <rect x="650" y="636" width="60" height="18" class="rel-bg" />
+  <text x="680" y="649" class="rel-text" text-anchor="middle">1 : 1 (trip)</text>
+
+  <!-- 11. expenses -> expense_items (1:N) [Bottom clear corridor at Y=1040 completely below all cards] -->
+  <path d="M 680 1010 L 680 1040 L 1545 1040 L 1545 890" class="rel-line-solid" marker-start="url(#circle)" marker-end="url(#arrow)" />
+  <rect x="1060" y="1031" width="105" height="18" class="rel-bg" />
+  <text x="1112" y="1044" class="rel-text" text-anchor="middle">1 : N (expense_id)</text>
+
+  <!-- 12. FIXED: users -> approval_records (Approver FK) [Routed cleanly via Corridor between Col 3 & 4 at X=1340 - NO OVERLAP] -->
+  <path d="M 215 100 L 215 35 L 1340 35 L 1340 755 L 1280 755" class="rel-line" marker-start="url(#circle)" marker-end="url(#arrow)" />
+  <rect x="740" y="26" width="115" height="18" class="rel-bg" />
+  <text x="797" y="39" class="rel-text" text-anchor="middle">1 : N (approver_id)</text>
+
+</svg>
