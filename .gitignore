@@ -1,0 +1,35 @@
+# ── Environment & Secrets ────────────────────────────────────
+.env
+.env.local
+.env.*.local
+src/backend/.env
+src/frontend/.env
+
+# ── Database ─────────────────────────────────────────────────
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# ── Node Modules ─────────────────────────────────────────────
+node_modules/
+src/backend/node_modules/
+src/frontend/node_modules/
+
+# ── Build Output ─────────────────────────────────────────────
+dist/
+build/
+src/backend/dist/
+src/frontend/dist/
+
+# ── Logs ─────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+
+# ── OS & IDE ─────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+*.swp
+*.swo

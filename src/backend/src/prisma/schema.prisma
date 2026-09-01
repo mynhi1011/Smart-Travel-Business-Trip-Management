@@ -1,0 +1,277 @@
+// =============================================================================
+// schema.prisma — Smart Travel & Business Trip Management
+// Nhóm 11 — MIS3032_1
+//
+// Tài liệu tham chiếu: docs/05-technical/data-model.md
+//
+// Database: SQLite (local dev / scaffold)
+//   → Production: đổi provider = "postgresql" và thêm @db.* type annotations
+//
+// SQLite limitations so với PostgreSQL spec:
+//   - Không hỗ trợ native ENUM → dùng String + validation ở Service layer
+//   - Không hỗ trợ BigInt natively → dùng Int (đủ cho demo, max ~2.1 tỷ VNĐ)
+//   - Không hỗ trợ @db.Timestamptz, @db.VarChar, @db.Uuid → generic types
+//   - violations/metadata dùng String (JSON serialized) thay vì Json
+//
+// Prisma: v5.22.0
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// MODELS — 10 bảng theo data-model.md §3
+// Enum values được validate ở Service layer (TypeScript types vẫn enforce)
+// =============================================================================
+
+/// users — Nhân viên, Manager, Travel Admin, Finance, Admin
+/// role: UserRole enum (EMPLOYEE|MANAGER|TRAVEL_ADMIN|FINANCE|ADMIN)
+/// jobGrade: JobGrade enum (STAFF|MANAGER_GRADE|DIRECTOR) — dùng BR-TR-01
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         String   // UserRole — validated in service
+  jobGrade     String   @default("STAFF") @map("job_grade") // JobGrade
+  department   String?
+  managerId    String?  @map("manager_id")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Self-reference — manager_id → users(id)
+  manager      User?  @relation("UserManager", fields: [managerId], references: [id])
+  subordinates User[] @relation("UserManager")
+
+  // Relations
+  trips              Trip[]           @relation("TripEmployee")
+  approvalRecords    ApprovalRecord[]
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+  refreshTokens      RefreshToken[]
+  reapprovedExpenses Expense[]        @relation("ExpenseReapprover")
+
+  @@index([managerId])
+  @@map("users")
+}
+
+/// refresh_tokens — JWT Refresh Token (SHA-256 hash)
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  isRevoked Boolean  @default(false) @map("is_revoked")
+  ipAddress String?  @map("ip_address")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+/// trips — Entity trung tâm, toàn bộ vòng đời chuyến công tác
+/// status: TripStatus enum (DRAFT|SUBMITTED|...|CLOSED|REJECTED)
+/// estimatedBudget/hotelCostPerNight/v.v: Int = VNĐ nguyên (BIGINT trong PostgreSQL)
+model Trip {
+  id              String   @id @default(uuid())
+  employeeId      String   @map("employee_id")
+  origin          String
+  destination     String
+  destinationType String   @map("destination_type") // DestinationType: TIER1_CITY|OTHER
+  departureDate   DateTime @map("departure_date")
+  returnDate      DateTime @map("return_date")
+  purpose            String
+  estimatedBudget    Int      @map("estimated_budget")
+  hotelCostPerNight  Int?     @map("hotel_cost_per_night") // BR-TR-01
+  hotelNights        Int?     @map("hotel_nights")
+  perDiemBudget      Int?     @map("per_diem_budget")     // BR-TR-02
+  transportBudget    Int?     @map("transport_budget")
+  otherBudget        Int?     @map("other_budget")
+  status             String   @default("DRAFT")            // TripStatus
+  isUrgent           Boolean  @default(false) @map("is_urgent")     // BR-TR-03
+  urgencyReason      String?  @map("urgency_reason")
+  requiresLevel2     Boolean  @default(false) @map("requires_level2") // BR-TR-04
+  submittedAt        DateTime? @map("submitted_at")
+  approvedAt         DateTime? @map("approved_at")
+  closedAt           DateTime? @map("closed_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  employee          User               @relation("TripEmployee", fields: [employeeId], references: [id])
+  policyCheckResult PolicyCheckResult?
+  itineraryItems    ItineraryItem[]
+  approvalRecords   ApprovalRecord[]
+  expense           Expense?
+
+  @@index([employeeId])
+  @@index([status])
+  @@index([departureDate])
+  @@index([employeeId, status])
+  @@map("trips")
+}
+
+/// policy_check_results — Snapshot kết quả Policy Check (1:1 với trips)
+/// violations: JSON string array [{code, detail, severity, rule, limit, actual}]
+model PolicyCheckResult {
+  id                     String   @id @default(uuid())
+  tripId                 String   @unique @map("trip_id")
+  passed                 Boolean
+  violations             String   @default("[]") // JSON string
+  violationCount         Int      @default(0) @map("violation_count")
+  requiresLevel2Approval Boolean  @default(false) @map("requires_level2_approval")
+  checkedAt              DateTime @default(now()) @map("checked_at")
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@map("policy_check_results")
+}
+
+/// itinerary_items — Các mốc lịch trình
+/// timeSlot: TimeSlot enum (MORNING|AFTERNOON|EVENING|ALL_DAY)
+/// category: ItineraryCategory enum (MEETING|ACCOMMODATION|TRANSPORT|MEAL|OTHER)
+model ItineraryItem {
+  id            String   @id @default(uuid())
+  tripId        String   @map("trip_id")
+  itemDate      DateTime @map("item_date")
+  dayNumber     Int      @map("day_number")
+  timeSlot      String   @map("time_slot")   // TimeSlot
+  location      String
+  activity      String
+  category      String                        // ItineraryCategory
+  estimatedCost Int      @default(0) @map("estimated_cost")
+  notes         String?
+  isAiGenerated Boolean  @default(false) @map("is_ai_generated")
+  sortOrder     Int      @default(0) @map("sort_order")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tripId])
+  @@index([tripId, itemDate])
+  @@map("itinerary_items")
+}
+
+/// approval_records — Lịch sử phê duyệt với snapshot budget
+/// approvalLevel: ApprovalLevel enum (LEVEL_1|LEVEL_2|MANAGER_REAPPROVE)
+/// action: ApprovalAction enum (APPROVED|REJECTED)
+model ApprovalRecord {
+  id                    String   @id @default(uuid())
+  tripId                String   @map("trip_id")
+  approverId            String   @map("approver_id")
+  approvalLevel         String   @map("approval_level") // ApprovalLevel
+  action                String                           // ApprovalAction
+  comment               String?
+  budgetSnapshot        Int      @map("budget_snapshot")
+  hadViolationsSnapshot Boolean  @map("had_violations_snapshot")
+  actedAt               DateTime @default(now()) @map("acted_at")
+
+  trip     Trip @relation(fields: [tripId], references: [id])
+  approver User @relation(fields: [approverId], references: [id])
+
+  @@index([tripId])
+  @@index([approverId])
+  @@map("approval_records")
+}
+
+/// expenses — Header Expense Claim (1:1 với trips)
+/// BR-TR-05: variancePct ≤0 → normal; 0-10% → cần justification; >10% → Manager re-approve
+model Expense {
+  id                       String   @id @default(uuid())
+  tripId                   String   @unique @map("trip_id")
+  totalActual              Int      @default(0) @map("total_actual")
+  estimatedBudgetSnapshot  Int      @map("estimated_budget_snapshot")
+  variancePct              Float?   @map("variance_pct")
+  varianceAmount           Int?     @map("variance_amount")
+  justification            String?
+  managerReapprovalRequired Boolean @default(false) @map("manager_reapproval_required")
+  managerReapproved         Boolean @default(false) @map("manager_reapproved")
+  managerReapproverId       String? @map("manager_reapprover_id")
+  managerReapprovedAt       DateTime? @map("manager_reapproved_at")
+  status                    String  @default("DRAFT") // ExpenseStatus
+  submittedAt               DateTime? @map("submitted_at")
+  approvedAt                DateTime? @map("approved_at")
+  createdAt                 DateTime @default(now()) @map("created_at")
+  updatedAt                 DateTime @updatedAt @map("updated_at")
+
+  trip              Trip          @relation(fields: [tripId], references: [id])
+  managerReapprover User?         @relation("ExpenseReapprover", fields: [managerReapproverId], references: [id])
+  items             ExpenseItem[]
+
+  @@index([status])
+  @@map("expenses")
+}
+
+/// expense_items — Từng khoản chi thành phần
+/// category: ExpenseCategory enum (ACCOMMODATION|TRANSPORT|MEAL|PER_DIEM|OTHER)
+/// amount: > 0 — validate ở Service layer
+model ExpenseItem {
+  id          String   @id @default(uuid())
+  expenseId   String   @map("expense_id")
+  expenseDate DateTime @map("expense_date")
+  category    String                       // ExpenseCategory
+  amount      Int
+  description String
+  receiptUrl  String?  @map("receipt_url")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+
+  @@index([expenseId])
+  @@map("expense_items")
+}
+
+/// notifications — Thông báo in-app cho SSE
+/// type: NotificationType enum
+model Notification {
+  id            String   @id @default(uuid())
+  recipientId   String   @map("recipient_id")
+  type          String                       // NotificationType
+  message       String
+  referenceId   String?  @map("reference_id")
+  referenceType String?  @map("reference_type")
+  isRead        Boolean  @default(false) @map("is_read")
+  readAt        DateTime? @map("read_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  recipient User @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId])
+  @@index([recipientId, isRead])
+  @@index([referenceId])
+  @@map("notifications")
+}
+
+/// audit_logs — Immutable audit trail (NFR-TR-04)
+/// INSERT only — không bao giờ UPDATE hay DELETE
+/// metadata: JSON string
+model AuditLog {
+  id            String   @id @default(uuid())
+  userId        String   @map("user_id")
+  entityType    String   @map("entity_type") // AuditEntityType
+  entityId      String   @map("entity_id")
+  action        String
+  previousState String?  @map("previous_state")
+  newState      String?  @map("new_state")
+  metadata      String   @default("{}") // JSON string
+  ipAddress     String?  @map("ip_address")
+  timestamp     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([entityId, entityType])
+  @@index([userId])
+  @@index([timestamp(sort: Desc)])
+  @@index([action])
+  @@map("audit_logs")
+}

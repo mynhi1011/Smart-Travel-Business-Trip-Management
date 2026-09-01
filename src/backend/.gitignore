@@ -1,0 +1,33 @@
+# ── Environment & Secrets ────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Database (SQLite dev files) ───────────────────────────────
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+src/prisma/*.db
+
+# ── Build Output ─────────────────────────────────────────────
+dist/
+build/
+
+# ── Node Modules ─────────────────────────────────────────────
+node_modules/
+
+# ── Logs ─────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+
+# ── Prisma Generated (regenerate with: npm run db:generate) ──
+# node_modules/@prisma/client bị bao phủ bởi node_modules/
+# Không ignore prisma/migrations — cần commit
+
+# ── OS & IDE ─────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+*.swp
