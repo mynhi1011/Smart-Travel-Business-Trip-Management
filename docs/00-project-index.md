@@ -1,6 +1,11 @@
 # Project Index - Smart Travel & Business Trip Management
 
 Nhóm 11 - MIS3032_1. Index này để chấm bài trong 60 giây — mọi artifact chính thức được link từ đây.
+## Current Submission
+
+**Report:** Report 1 – Discovery & Project Vault  
+**Status:** READY FOR SUBMISSION  
+**Git Tag:** `report1-freeze`
 
 ## 01. Discovery
 - [Project Charter](01-discovery/project-charter.md)
