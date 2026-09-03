@@ -16,3 +16,4 @@ Ghi lại mọi quyết định quan trọng của dự án — không được 
 
 - Mỗi khi nhóm đổi scope, đổi tech stack, đổi business rule quan trọng, hoặc bác bỏ 1 đề xuất (kể cả đề xuất từ AI) — phải thêm 1 dòng mới vào bảng trên.
 - Không xoá quyết định cũ, kể cả khi sau này bị thay đổi — chỉ thêm quyết định mới và ghi rõ "Superseded D-0X" trong lý do nếu có.
+NHI
