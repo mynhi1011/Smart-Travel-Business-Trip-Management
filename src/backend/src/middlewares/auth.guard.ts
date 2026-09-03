@@ -7,13 +7,22 @@
  * Thứ tự trong middleware chain: sau requestLogger, trước roleGuard
  * Tài liệu tham chiếu: architecture.md §6, API.md §2
  *
- * TODO: Implement JWT verify logic khi xây dựng Auth feature
+ * JWT Payload format (architecture.md §6.1):
+ *   { sub: userId, role, name, iat, exp }
+ *
+ * Error mapping (API.md §3):
+ *   - Thiếu/sai format header  → 401 UNAUTHORIZED
+ *   - Token hết hạn            → 401 TOKEN_EXPIRED  (client tự refresh)
+ *   - Token sai chữ ký/corrupt → 401 INVALID_TOKEN
  */
 
 import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
 import { Errors } from './error-handler';
+import type { JwtPayload } from '../services/auth.service';
 
-// Extend Express Request để thêm user payload
+// ─── Express Request Extension ────────────────────────────────────────────────
+
 declare global {
   namespace Express {
     interface Request {
@@ -26,33 +35,66 @@ declare global {
   }
 }
 
+// ─── authGuard ────────────────────────────────────────────────────────────────
+
 /**
  * authGuard — Verify JWT Access Token
- * Reject với 401 nếu token không hợp lệ hoặc đã hết hạn.
  *
- * JWT Payload format (architecture.md §6.1):
- *   { sub: userId, role, name, iat, exp }
+ * Bắt buộc apply trên tất cả protected routes.
+ * Routes public (login, refresh, health) KHÔNG dùng middleware này.
  */
 export function authGuard(
   req: Request,
   _res: Response,
   next: NextFunction
 ): void {
-  // TODO: Implement JWT verification
   // 1. Extract token từ "Authorization: Bearer <token>"
-  // 2. Verify bằng jsonwebtoken với JWT_ACCESS_SECRET
-  // 3. Gắn req.user = { id: payload.sub, role: payload.role, name: payload.name }
-  // 4. Xử lý TokenExpiredError → throw Errors.TOKEN_EXPIRED()
-  //    JsonWebTokenError → throw Errors.INVALID_TOKEN()
-
-  // Placeholder — sẽ replace khi implement Auth
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
     next(Errors.UNAUTHORIZED());
     return;
   }
 
-  // Stub: chỉ pass qua để server boot được — sẽ implement đầy đủ ở Auth feature
-  // ⚠️ KHÔNG dùng stub này trong production
-  next(Errors.UNAUTHORIZED());
+  const token = authHeader.slice(7); // Bỏ "Bearer " prefix
+  if (!token) {
+    next(Errors.UNAUTHORIZED());
+    return;
+  }
+
+  // 2. Verify JWT
+  const secret = process.env['JWT_ACCESS_SECRET'];
+  if (!secret) {
+    // Lỗi cấu hình server — không expose ra client
+    next(new Error('JWT_ACCESS_SECRET không được cấu hình'));
+    return;
+  }
+
+  try {
+    const payload = jwt.verify(token, secret) as JwtPayload;
+
+    // 3. Gắn req.user từ payload
+    req.user = {
+      id: payload.sub,
+      role: payload.role,
+      name: payload.name,
+    };
+
+    next();
+  } catch (err) {
+    // 4. Xử lý lỗi JWT theo spec API.md §3
+    if (err instanceof jwt.TokenExpiredError) {
+      // Token hết hạn → client tự gọi /auth/refresh rồi retry
+      next(Errors.TOKEN_EXPIRED());
+      return;
+    }
+
+    if (err instanceof jwt.JsonWebTokenError) {
+      // Sai chữ ký, sai format, bị tamper
+      next(Errors.INVALID_TOKEN());
+      return;
+    }
+
+    // Lỗi không xác định
+    next(Errors.UNAUTHORIZED());
+  }
 }

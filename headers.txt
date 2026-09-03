@@ -1,0 +1,27 @@
+HTTP/1.1 200 OK
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Resource-Policy: cross-origin
+Origin-Agent-Cluster: ?1
+Referrer-Policy: no-referrer
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+X-Content-Type-Options: nosniff
+X-DNS-Prefetch-Control: off
+X-Download-Options: noopen
+X-Frame-Options: SAMEORIGIN
+X-Permitted-Cross-Domain-Policies: none
+X-XSS-Protection: 0
+Vary: Origin
+Access-Control-Allow-Credentials: true
+RateLimit-Policy: 200;w=900
+RateLimit: limit=200, remaining=193, reset=485
+X-RateLimit-Limit: 20
+X-RateLimit-Remaining: 14
+Date: Thu, 03 Sep 2026 08:05:55 GMT
+X-RateLimit-Reset: 1788423278
+Set-Cookie: refreshToken=2550936eaaf54ad6f191df035fabcb15b37ef25de75eff056f6589b6234c106d8b33fba3d92359f83383c76372cc7b011a1a08af6b9bb0275492c08357c9ab01; Max-Age=604800; Path=/; Expires=Thu, 10 Sep 2026 08:05:56 GMT; HttpOnly; SameSite=Strict
+Content-Type: application/json; charset=utf-8
+Content-Length: 529
+ETag: W/"211-hTiutoovbPtSDCPYdQ8GIkfBalY"
+Connection: keep-alive
+Keep-Alive: timeout=5
+

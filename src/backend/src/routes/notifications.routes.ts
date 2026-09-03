@@ -1,26 +1,15 @@
-/**
- * notifications.routes.ts — SSE Notifications Route
- * GET /api/v1/notifications/stream  (Server-Sent Events)
- * GET /api/v1/notifications         (List notifications)
- * PATCH /api/v1/notifications/:id/read
- *
- * TODO: Implement SSE emitter ở Bước 6
- */
-
-import { Router, Request, Response } from 'express';
+import { Router } from 'express';
+import { authGuard } from '../middlewares/auth.guard';
+import { listNotifications, markAsRead, markAllRead, streamNotifications } from '../controllers/notification.controller';
 
 const router = Router();
 
-router.get('/stream', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'SSE /notifications/stream — coming soon' });
-});
+// SSE stream — auth via query ?token= (EventSource cannot set headers)
+router.get('/stream',                  streamNotifications);
 
-router.get('/', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'GET /notifications — coming soon' });
-});
-
-router.patch('/:id/read', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'PATCH notification read — coming soon' });
-});
+// Protected
+router.get('/',                        authGuard, listNotifications);
+router.patch('/read-all',              authGuard, markAllRead);
+router.patch('/:notificationId/read',  authGuard, markAsRead);
 
 export default router;

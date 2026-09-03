@@ -1,27 +1,26 @@
 /**
  * auth.routes.ts — Authentication Routes
- * POST /api/v1/auth/login
- * POST /api/v1/auth/refresh
- * POST /api/v1/auth/logout
  *
- * TODO: Implement controllers ở Bước 6
+ * POST   /api/v1/auth/login    — Public — đăng nhập
+ * POST   /api/v1/auth/refresh  — Public — làm mới access token (dùng cookie)
+ * DELETE /api/v1/auth/logout   — Protected — đăng xuất, revoke refresh token
+ * GET    /api/v1/auth/me       — Protected (ALL roles) — lấy thông tin user
+ *
+ * Tài liệu tham chiếu: API.md §4, architecture.md §6
  */
 
-import { Router, Request, Response } from 'express';
+import { Router } from 'express';
+import { login, refresh, logout, me } from '../controllers/auth.controller';
+import { authGuard } from '../middlewares/auth.guard';
 
 const router = Router();
 
-// Placeholder — sẽ replace bằng controller thật ở Bước 6
-router.post('/login', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'Auth login — coming soon' });
-});
+// ── Public routes (không cần token) ──────────────────────────────────────────
+router.post('/login', login);
+router.post('/refresh', refresh);
 
-router.post('/refresh', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'Auth refresh — coming soon' });
-});
-
-router.post('/logout', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'Auth logout — coming soon' });
-});
+// ── Protected routes (cần token) ─────────────────────────────────────────────
+router.delete('/logout', authGuard, logout);
+router.get('/me', authGuard, me);
 
 export default router;

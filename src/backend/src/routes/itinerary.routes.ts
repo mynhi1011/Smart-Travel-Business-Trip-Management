@@ -1,31 +1,14 @@
-/**
- * itinerary.routes.ts — Itinerary Item CRUD Routes
- * GET    /api/v1/trips/:id/itinerary
- * POST   /api/v1/trips/:id/itinerary
- * PUT    /api/v1/trips/:id/itinerary/:itemId
- * DELETE /api/v1/trips/:id/itinerary/:itemId
- *
- * TODO: Implement controllers ở Bước 6
- */
-
-import { Router, Request, Response } from 'express';
+import { Router } from 'express';
+import { authGuard } from '../middlewares/auth.guard';
+import { roleGuard } from '../middlewares/role.guard';
+import { immutableGuard } from '../middlewares/immutable.guard';
+import { getItinerary, addItineraryItem, updateItineraryItem, deleteItineraryItem } from '../controllers/itinerary.controller';
 
 const router = Router();
 
-router.get('/:id/itinerary', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'GET itinerary — coming soon' });
-});
-
-router.post('/:id/itinerary', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'POST itinerary — coming soon' });
-});
-
-router.put('/:id/itinerary/:itemId', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'PUT itinerary item — coming soon' });
-});
-
-router.delete('/:id/itinerary/:itemId', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'DELETE itinerary item — coming soon' });
-});
+router.get( '/:id/itinerary',               authGuard,                                           getItinerary);
+router.post('/:id/itinerary',               authGuard, roleGuard(['EMPLOYEE']), immutableGuard,  addItineraryItem);
+router.patch('/:id/itinerary/:itemId',      authGuard, roleGuard(['EMPLOYEE']), immutableGuard,  updateItineraryItem);
+router.delete('/:id/itinerary/:itemId',     authGuard, roleGuard(['EMPLOYEE']), immutableGuard,  deleteItineraryItem);
 
 export default router;

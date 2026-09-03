@@ -1,56 +1,28 @@
-/**
- * expenses.routes.ts — Expense Claim Routes
- * GET    /api/v1/trips/:id/expenses
- * POST   /api/v1/trips/:id/expenses
- * POST   /api/v1/trips/:id/expenses/submit
- * POST   /api/v1/trips/:id/expenses/approve
- * POST   /api/v1/trips/:id/expenses/reject
- * POST   /api/v1/trips/:id/expenses/reapprove
- * POST   /api/v1/trips/:id/expenses/items
- * PUT    /api/v1/trips/:id/expenses/items/:itemId
- * DELETE /api/v1/trips/:id/expenses/items/:itemId
- *
- * TODO: Implement controllers ở Bước 6
- */
-
-import { Router, Request, Response } from 'express';
+import { Router } from 'express';
+import { authGuard } from '../middlewares/auth.guard';
+import { roleGuard } from '../middlewares/role.guard';
+import {
+  getExpense, createExpense, updateExpense,
+  addExpenseItem, updateExpenseItem, deleteExpenseItem,
+  submitExpense, approveExpense, rejectExpense, reapproveExpense,
+} from '../controllers/expense.controller';
 
 const router = Router();
 
-router.get('/:id/expenses', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'GET expenses — coming soon' });
-});
+// Expense header
+router.get(  '/:id/expenses',         authGuard,                               getExpense);
+router.post( '/:id/expenses',         authGuard, roleGuard(['EMPLOYEE']),       createExpense);
+router.patch('/:id/expenses',         authGuard, roleGuard(['EMPLOYEE']),       updateExpense);
 
-router.post('/:id/expenses', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'POST expenses — coming soon' });
-});
+// Expense items
+router.post(  '/:id/expenses/items',              authGuard, roleGuard(['EMPLOYEE']), addExpenseItem);
+router.patch( '/:id/expenses/items/:itemId',      authGuard, roleGuard(['EMPLOYEE']), updateExpenseItem);
+router.delete('/:id/expenses/items/:itemId',      authGuard, roleGuard(['EMPLOYEE']), deleteExpenseItem);
 
-router.post('/:id/expenses/submit', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'POST expenses/submit — coming soon' });
-});
-
-router.post('/:id/expenses/approve', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'POST expenses/approve — coming soon' });
-});
-
-router.post('/:id/expenses/reject', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'POST expenses/reject — coming soon' });
-});
-
-router.post('/:id/expenses/reapprove', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'POST expenses/reapprove — coming soon' });
-});
-
-router.post('/:id/expenses/items', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'POST expense items — coming soon' });
-});
-
-router.put('/:id/expenses/items/:itemId', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'PUT expense item — coming soon' });
-});
-
-router.delete('/:id/expenses/items/:itemId', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'DELETE expense item — coming soon' });
-});
+// Actions
+router.post('/:id/expenses/submit',    authGuard, roleGuard(['EMPLOYEE']),              submitExpense);
+router.post('/:id/expenses/approve',   authGuard, roleGuard(['FINANCE']),               approveExpense);
+router.post('/:id/expenses/reject',    authGuard, roleGuard(['FINANCE']),               rejectExpense);
+router.post('/:id/expenses/reapprove', authGuard, roleGuard(['MANAGER']),               reapproveExpense);
 
 export default router;

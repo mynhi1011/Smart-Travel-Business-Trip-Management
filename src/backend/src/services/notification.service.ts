@@ -8,6 +8,7 @@
  */
 
 import prisma from '../prisma/client';
+import * as sseEmitter from '../lib/sse-emitter';
 
 // ─── Notification Types (data-model.md §4) ───────────────────────────────────
 
@@ -51,12 +52,12 @@ export async function createNotification(
     },
   });
 
-  // 2. TODO: Emit SSE event
-  // sseEmitter.emit(input.recipientId, {
-  //   type: input.type,
-  //   referenceId: input.referenceId,
-  //   message: input.message,
-  // });
+  // 2. Emit SSE event
+  sseEmitter.emit(input.recipientId, {
+    type:        input.type,
+    referenceId: input.referenceId,
+    message:     input.message,
+  });
 }
 
 /**

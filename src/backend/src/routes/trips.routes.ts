@@ -1,56 +1,30 @@
 /**
  * trips.routes.ts — Trip Request CRUD & Action Routes
- * GET    /api/v1/trips
- * POST   /api/v1/trips
- * GET    /api/v1/trips/:id
- * PUT    /api/v1/trips/:id
- * DELETE /api/v1/trips/:id
- * POST   /api/v1/trips/:id/submit
- * POST   /api/v1/trips/:id/approve
- * POST   /api/v1/trips/:id/reject
- * POST   /api/v1/trips/:id/close
- *
- * TODO: Implement controllers ở Bước 6
+ * API.md §5 + §6
  */
 
-import { Router, Request, Response } from 'express';
+import { Router } from 'express';
+import { authGuard } from '../middlewares/auth.guard';
+import { roleGuard } from '../middlewares/role.guard';
+import { immutableGuard } from '../middlewares/immutable.guard';
+import {
+  createTrip, listTrips, getTripById, updateTrip, deleteTrip,
+  submitTrip, approveTrip, rejectTrip, closeTrip,
+} from '../controllers/trip.controller';
 
 const router = Router();
 
-router.get('/', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'GET /trips — coming soon' });
-});
+// CRUD
+router.get( '/',     authGuard,                                              listTrips);
+router.post('/',     authGuard, roleGuard(['EMPLOYEE']),                     createTrip);
+router.get( '/:id',  authGuard,                                              getTripById);
+router.patch('/:id', authGuard, roleGuard(['EMPLOYEE']), immutableGuard,     updateTrip);
+router.delete('/:id',authGuard, roleGuard(['EMPLOYEE']),                     deleteTrip);
 
-router.post('/', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'POST /trips — coming soon' });
-});
-
-router.get('/:id', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'GET /trips/:id — coming soon' });
-});
-
-router.put('/:id', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'PUT /trips/:id — coming soon' });
-});
-
-router.delete('/:id', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'DELETE /trips/:id — coming soon' });
-});
-
-router.post('/:id/submit', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'POST /trips/:id/submit — coming soon' });
-});
-
-router.post('/:id/approve', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'POST /trips/:id/approve — coming soon' });
-});
-
-router.post('/:id/reject', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'POST /trips/:id/reject — coming soon' });
-});
-
-router.post('/:id/close', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'POST /trips/:id/close — coming soon' });
-});
+// Actions
+router.post('/:id/submit',  authGuard, roleGuard(['EMPLOYEE']),                       submitTrip);
+router.post('/:id/approve', authGuard, roleGuard(['MANAGER', 'TRAVEL_ADMIN']),        approveTrip);
+router.post('/:id/reject',  authGuard, roleGuard(['MANAGER', 'TRAVEL_ADMIN']),        rejectTrip);
+router.post('/:id/close',   authGuard, roleGuard(['FINANCE']),                        closeTrip);
 
 export default router;

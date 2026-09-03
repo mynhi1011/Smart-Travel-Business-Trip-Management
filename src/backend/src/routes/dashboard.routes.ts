@@ -1,16 +1,7 @@
-/**
- * dashboard.routes.ts — Dashboard Route
- * GET /api/v1/dashboard
- *
- * TODO: Implement controllers ở Bước 6
- */
-
-import { Router, Request, Response } from 'express';
+import { Router } from 'express';
+import { authGuard } from '../middlewares/auth.guard';
+import { getDashboard } from '../controllers/dashboard.controller';
 
 const router = Router();
-
-router.get('/', (_req: Request, res: Response) => {
-  res.status(501).json({ error: 'NOT_IMPLEMENTED', message: 'GET /dashboard — coming soon' });
-});
-
+router.get('/', authGuard, getDashboard);
 export default router;
