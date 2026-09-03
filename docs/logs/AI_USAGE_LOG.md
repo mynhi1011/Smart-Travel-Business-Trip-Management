@@ -27,3 +27,5 @@ Ghi lại **mọi** lần dùng AI có ảnh hưởng tới artifact của dự 
 - A-05 là ví dụ bắt buộc theo giáo trình về việc **từ chối đề xuất của AI** (AI giữ nguyên số liệu phỏng vấn thô, con người phát hiện sai lệch nguồn và chuẩn hoá lại business rule) — đây là bằng chứng nhóm dùng AI có kiểm soát (human-in-the-loop), không chấp nhận mù quáng.
 - A-12 là ví dụ về việc **không bịa kết quả kiểm thử**: khi AI chưa có provider thật để chạy, nhóm ghi rõ trạng thái `NOT EXECUTED` thay vì báo cáo giả "test pass".
 - Các giai đoạn chưa log AI usage (06-testing/, 07-release/, code backend/frontend) là vì artifact tương ứng **chưa được tạo** (file đang trống, xem README). Log sẽ được bổ sung ngay khi nhóm bắt đầu các giai đoạn đó theo Plan Master.
+
+.
