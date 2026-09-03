@@ -135,6 +135,64 @@ Resource-level: `employeeId` luôn được set bởi server = `req.user.id`, cl
 
 ---
 
+## Ma Trận Validation Chi Tiết — Ngày & Per Diem (BR-TR-02, BR-TR-03)
+
+### Chốt câu hỏi mở
+
+**1. "3 ngày làm việc" có tính ngày nghỉ lễ (Public Holidays) không?**
+Giai đoạn MVP chỉ tính ngày làm việc thông thường Thứ Hai – Thứ Sáu (`DayOfWeek not in [Saturday, Sunday]`), **không** trừ động lịch ngày lễ quốc gia. Việc tích hợp lịch nghỉ lễ (kể cả nghỉ bù, hoán đổi ngày) đòi hỏi service quản lý lịch động riêng, dự kiến đưa vào Phase 2 qua bảng cấu hình `holiday_calendar`. Nếu chuyến đi rơi vào tuần có lễ khiến nộp gấp, Employee vẫn có thể tick `is_urgent = true` kèm `urgencyReason` — hệ thống không chặn nộp mà định tuyến cờ khẩn cấp tới Manager (L1).
+
+**2. Per Diem warning là client-only hay có validate server-side?**
+Áp dụng mô hình **Soft Validation đồng bộ cả Client và Server, không bao giờ block (không trả 400)**:
+- **Client:** ngay khi nhập `perDiemBudget`, tính `Max_Per_Diem`; nếu vượt, hiển thị banner cảnh báo màu vàng cam, nút Submit vẫn bật.
+- **Server (`POST /api/v1/trips`):** validate lại công thức để chống can thiệp dữ liệu từ client; nếu vượt, vẫn trả `201 Created` kèm `warnings: ["POLICY_VIOLATION_PER_DIEM_EXCEEDED"]` (dùng đúng mã đã định nghĩa trong `US-04-policy-check.md` và `data-model.md` để PolicyCheckEngine ở US-04 nhận diện cùng loại vi phạm khi Manager duyệt L1).
+
+> **⚠️ Giả định mới — cần PO xác nhận:** Ma trận bên dưới áp dụng ràng buộc `urgencyReason` phải có **tối thiểu 10 ký tự**. Ràng buộc này chưa được định nghĩa ở `business-rules.md` hay `requirements.md` (vốn chỉ quy định `purpose` ≥ 10 ký tự) — cần Product Owner chốt trước khi Ánh Tuyết code validation này ở TSK-102.
+
+### Bảng 1 — Ma trận validation NGÀY (BR-TR-03, Advance Notice Rule)
+
+**Quy ước:** `workingDaysRemaining` = số ngày làm việc (T2–T6) trong khoảng `[today+1, departureDate]` (tính cả ngày khởi hành). Nếu `>= 3` → không khẩn cấp; nếu `0 <= ... < 3` → khẩn cấp, bắt buộc `urgencyReason`.
+
+| STT | Điều kiện đầu vào (`departureDate`, `today`, ngày làm việc) | `workingDaysRemaining` | `is_urgent` | Yêu cầu UI / Form Fields | Response Code | Message hiển thị / Xử lý hệ thống |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **TC-D01** | `departureDate` trong quá khứ (`departureDate < today`) | N/A (< 0) | N/A | Highlight đỏ ô `departureDate`. Disable Submit. | `400 Bad Request` | *"Ngày khởi hành không được nằm trong quá khứ."* |
+| **TC-D02** | `returnDate < departureDate` | N/A | N/A | Highlight đỏ ô `returnDate`. Disable Submit. | `400 Bad Request` | *"Ngày kết thúc chuyến đi phải lớn hơn hoặc bằng ngày khởi hành."* |
+| **TC-D03** | Nộp Thứ 2, đi Thứ 5 cùng tuần | `workingDaysRemaining = 3` (Thứ 3, 4, 5) | `false` | Checkbox "Đi công tác khẩn cấp" bỏ chọn/ẩn. `urgencyReason` optional. | `201 Created` | Tạo yêu cầu thành công, quy trình phê duyệt tiêu chuẩn. |
+| **TC-D04** | Nộp trước đúng 3 ngày làm việc (Boundary Case) | `workingDaysRemaining = 3` | `false` | Không yêu cầu `urgencyReason`. | `201 Created` | Tạo yêu cầu thành công (Normal Notice). |
+| **TC-D05** | Nộp trước 1–2 ngày làm việc, CÓ nhập `urgencyReason` (≥10 ký tự) | `1 <= ... < 3` | `true` | Checkbox `is_urgent` tự bật/khóa. `urgencyReason` bắt buộc, badge đỏ `*`. | `201 Created` | Tạo thành công, `is_urgent=true`, thông báo khẩn tới Manager L1. |
+| **TC-D06** | Nộp trước 1–2 ngày làm việc, KHÔNG nhập `urgencyReason` (hoặc <10 ký tự) | `1 <= ... < 3` | `true` | Lỗi inline tại `urgencyReason`. Submit bị chặn client. | `400 Bad Request` | *"Chuyến đi khởi hành dưới 3 ngày làm việc được coi là khẩn cấp. Vui lòng nhập lý do khẩn cấp (tối thiểu 10 ký tự)."* |
+| **TC-D07** | Đi ngay trong ngày (`departureDate == today`), CÓ `urgencyReason` | `workingDaysRemaining = 0` | `true` | Banner "Chuyến đi cùng ngày". `urgencyReason` bắt buộc. | `201 Created` | Tạo thành công, `is_urgent=true`. |
+| **TC-D08** | Đi ngay trong ngày, KHÔNG `urgencyReason` | `workingDaysRemaining = 0` | `true` | Lỗi inline. Submit bị chặn. | `400 Bad Request` | *"Yêu cầu công tác trong ngày bắt buộc phải có lý do khẩn cấp."* |
+| **TC-D09** | Nộp Thứ 6, đi Thứ 2 tuần kế tiếp (xen T7 & CN) | `workingDaysRemaining = 1` (chỉ Thứ 2 tính; T7, CN không tính) | `true` | Checkbox `is_urgent` tự bật. `urgencyReason` bắt buộc. | `201 Created` (có reason) / `400` (thiếu) | *"Chỉ có 1 ngày làm việc trước khi khởi hành (T7, CN không phải ngày làm việc). Vui lòng điền lý do khẩn cấp."* |
+| **TC-D10** | Nộp Thứ 5, đi Thứ 2 tuần kế tiếp (cách 4 ngày lịch, xen T7 & CN) | `workingDaysRemaining = 2` (Thứ 6 & Thứ 2) | `true` | Kích hoạt cờ khẩn cấp vì < 3. `urgencyReason` bắt buộc. | `201 Created` (có reason) / `400` (thiếu) | *"Số ngày làm việc còn lại: 2 (< 3). Yêu cầu thuộc diện công tác khẩn cấp."* |
+| **TC-D11** | Nộp Thứ 4, đi Thứ 3 tuần kế tiếp | `workingDaysRemaining = 4` (Thứ 5, 6, T2, T3 — tính cả ngày khởi hành) | `false` | Không khẩn cấp (vượt ngưỡng 3). | `201 Created` | Tạo yêu cầu thành công, luồng thông thường. |
+
+### Bảng 2 — Ma trận validation PER DIEM (BR-TR-02)
+
+**Định mức:** `TIER1_CITY` (Hà Nội, TP.HCM, Đà Nẵng) = **400.000 VNĐ/ngày**; `OTHER` = **300.000 VNĐ/ngày**. `tripDays = returnDate - departureDate + 1`. `Max_Per_Diem = tripDays × Daily_Rate`.
+
+| STT | `destinationType` | Rate/ngày | `tripDays` | `Max_Per_Diem` | `perDiemBudget` nhập vào | Kết quả | Hành vi hệ thống (UI & API) | Mã lỗi/Cảnh báo |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **TC-P01** | `TIER1_CITY` | 400.000 | 3 | 1.200.000 | 1.000.000 (< Max) | **Pass** | UI text xanh "Trong định mức cho phép". Lưu DB. | `201 Created` |
+| **TC-P02** | `TIER1_CITY` | 400.000 | 3 | 1.200.000 | 1.200.000 (= Max) | **Pass** (boundary) | UI hiển thị trạng thái hợp lệ. | `201 Created` |
+| **TC-P03** | `TIER1_CITY` | 400.000 | 3 | 1.200.000 | 1.500.000 (> Max, vượt 300k) | **Warning** | KHÔNG BLOCK. Banner vàng cam: *"Vượt định mức tối đa 1.200.000 VNĐ. Cần Manager duyệt ngoại lệ."* | `201 Created` + `warnings: ["POLICY_VIOLATION_PER_DIEM_EXCEEDED"]` |
+| **TC-P04** | `OTHER` | 300.000 | 4 | 1.200.000 | 1.000.000 (< Max) | **Pass** | Lưu bình thường. | `201 Created` |
+| **TC-P05** | `OTHER` | 300.000 | 4 | 1.200.000 | 1.200.000 (= Max) | **Pass** (boundary) | Lưu bình thường. | `201 Created` |
+| **TC-P06** | `OTHER` | 300.000 | 4 | 1.200.000 | 1.500.000 (> Max, vượt 300k) | **Warning** | KHÔNG BLOCK. Warning icon, highlight cho Manager L1. | `201 Created` + `warnings: ["POLICY_VIOLATION_PER_DIEM_EXCEEDED"]` |
+| **TC-P07** | Bất kỳ | Bất kỳ | ≥1 | Theo công thức | Bỏ trống (`null`) | **Pass** (optional field) | `perDiemBudget` không bắt buộc lúc tạo, có thể để `null`. | `201 Created` |
+| **TC-P08** | Bất kỳ | Bất kỳ | ≥1 | Theo công thức | Giá trị âm | **Fail** | BLOCK. Highlight đỏ, chặn submit. | `400 Bad Request` — *"Ngân sách công tác phí không được là số âm."* |
+| **TC-P09** | Bất kỳ | Bất kỳ | `tripDays ≤ 0` | N/A | Bất kỳ | **Fail** (edge case) | BLOCK ngay từ tầng validation ngày (TC-D01/D02). `tripDays` luôn ≥ 1. | `400 Bad Request` — *"Khoảng thời gian công tác không hợp lệ."* |
+| **TC-P10** | `destinationType` ngoài ENUM | N/A | Bất kỳ | N/A | Bất kỳ | **Fail** | BLOCK. Dropdown chỉ cho chọn TIER1_CITY/OTHER; API kiểm tra enum schema. | `400 Bad Request` — *"Loại điểm đến không hợp lệ."* |
+
+### Tóm tắt Hard vs Soft Validation
+
+| Loại kiểm tra | Tiêu chí | Cơ chế xử lý | HTTP Code | UI State |
+| :--- | :--- | :--- | :--- | :--- |
+| **Hard Validation** | Ngày quá khứ, `returnDate < departureDate`, thiếu `urgencyReason` khi `is_urgent=true`, số tiền âm, sai Enum. | Chặn gửi dữ liệu, báo lỗi cụ thể. | `400 Bad Request` | Viền đỏ, helper text, disable Submit. |
+| **Soft Validation** | `perDiemBudget > Max_Per_Diem`. | Cho phép gửi, lưu kèm cờ cảnh báo policy để Manager L1 review. | `201 Created` (kèm warning payload) | Viền vàng/cam, Callout Warning, không khóa Submit. |
+
+---
+
 ## Observability / Logging
 
 | Event | Log level | Nội dung |
@@ -182,6 +240,4 @@ Resource-level: `employeeId` luôn được set bởi server = `req.user.id`, cl
 - [ ] Response time ≤ 1s (NFR-TR-01)
 - [ ] Code review approved
 
-> **⚠️ Cần xác nhận trước khi code:**
-> 1. Cách tính "3 ngày làm việc" có bao gồm ngày lễ không? MVP hiện tại chỉ tính T2–T6.
-> 2. Per diem warning là client-only hay cũng server-side validate?
+> ✅ 2 câu hỏi mở trước đây (tính ngày lễ, per diem client/server) đã được chốt tại mục **"Ma Trận Validation Chi Tiết — Ngày & Per Diem"** ở trên. Còn 1 điểm cần **PO xác nhận** trước khi code TSK-102: ràng buộc `urgencyReason ≥ 10 ký tự` (xem callout ⚠️ trong mục đó).
