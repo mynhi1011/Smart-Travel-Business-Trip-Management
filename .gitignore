@@ -24,6 +24,8 @@ src/frontend/dist/
 
 # ── Logs ─────────────────────────────────────────────────────
 logs/
+!docs/logs/
+!docs/logs/**
 *.log
 npm-debug.log*
 
