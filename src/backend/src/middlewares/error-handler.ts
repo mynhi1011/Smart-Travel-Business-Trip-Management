@@ -57,6 +57,8 @@ export const Errors = {
   // 403
   FORBIDDEN: () =>
     new AppError(403, 'FORBIDDEN', 'Bạn không có quyền thực hiện hành động này.'),
+  NOT_OWNER: () =>
+    new AppError(403, 'NOT_OWNER', 'Bạn không phải chủ sở hữu tài nguyên này.'),
 
   // 404
   NOT_FOUND: (resource: string) =>
