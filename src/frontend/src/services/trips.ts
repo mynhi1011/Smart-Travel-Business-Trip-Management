@@ -5,16 +5,31 @@ export interface BackendTrip {
   employeeId: string;
   origin: string;
   destination: string;
+  destinationType: string;
   departureDate: string;
   returnDate: string;
   purpose: string;
   estimatedBudget: number;
+  hotelCostPerNight: number | null;
+  hotelNights: number | null;
+  perDiemBudget: number | null;
+  transportBudget: number | null;
+  otherBudget: number | null;
   status: string;
   isUrgent: boolean;
   urgencyReason: string | null;
+  requiresLevel2: boolean;
   submittedAt: string | null;
-  employee?: { name: string };
-  policyCheckResult?: { violations: Array<{ code: string; detail: string; severity: string }> } | null;
+  approvedAt: string | null;
+  closedAt: string | null;
+  tripDays: number;
+  employee?: { id: string; name: string; department: string | null; jobGrade: string };
+  policyCheckResult?: {
+    passed: boolean;
+    violations: Array<{ code: string; detail: string; severity: string }>;
+    violationCount: number;
+    requiresLevel2Approval: boolean;
+  } | null;
 }
 
 interface PaginatedTrips {

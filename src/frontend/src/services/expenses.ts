@@ -145,7 +145,7 @@ export async function reapproveExpense(
 ): Promise<BackendExpense> {
   const res = await apiRequest<{ data: BackendExpense }>(`/trips/${tripId}/expense/reapprove`, {
     method: 'POST',
-    body: JSON.stringify({ comment }),
+    body: JSON.stringify({ action: 'APPROVED', comment }),
   });
   return res.data;
 }

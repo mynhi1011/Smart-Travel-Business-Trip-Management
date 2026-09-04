@@ -348,19 +348,18 @@ export async function approveTrip(
   comment?: string,
   ipAddress?: string
 ): Promise<unknown> {
-  return prisma.$transaction(async (tx) => {
+  // ── Phase 1: DB writes trong transaction (nhanh) ─────────────────────────
+  const { updated, newStatus, auditAction, employeeId } = await prisma.$transaction(async (tx) => {
     const trip = await tx.trip.findUnique({
       where: { id: tripId },
       include: { policyCheckResult: true, employee: { select: { id: true, managerId: true } } },
     });
     if (!trip) throw Errors.TRIP_NOT_FOUND();
 
-    // Role + status check
     const isManagerApprove      = userRole === 'MANAGER' && trip.status === 'SUBMITTED';
     const isTravelAdminApprove  = userRole === 'TRAVEL_ADMIN' && trip.status === 'PENDING_ADMIN_APPROVAL';
     if (!isManagerApprove && !isTravelAdminApprove) throw Errors.FORBIDDEN();
 
-    // Quyết định routing (BR-TR-04)
     const hasViolations  = (trip.policyCheckResult?.violationCount ?? 0) > 0;
     const routing        = routeApproval({ totalBudget: trip.estimatedBudget, hasViolations });
     const newStatus      = isTravelAdminApprove ? 'APPROVED' : routing.decision;
@@ -381,20 +380,22 @@ export async function approveTrip(
       data: { status: newStatus, approvedAt: newStatus === 'APPROVED' ? new Date() : undefined },
     });
 
-    await logAudit({ userId: approverId, entityType: 'TRIP', entityId: tripId,
-      action: auditAction, previousState: trip.status, newState: newStatus,
-      ipAddress: ipAddress ?? null });
-
-    // Notify employee
-    await createNotification({ recipientId: trip.employee.id,
-      type: newStatus === 'APPROVED' ? 'TRIP_APPROVED' : 'PENDING_LEVEL2_APPROVAL',
-      message: newStatus === 'APPROVED'
-        ? 'Yeu cau cong tac cua ban da duoc phe duyet.'
-        : 'Yeu cau cong tac can phe duyet cap 2 (Travel Admin).',
-      referenceId: tripId, referenceType: 'TRIP' });
-
-    return formatTrip(updated as unknown as Record<string, unknown>);
+    return { updated, newStatus, auditAction, employeeId: trip.employee.id };
   });
+
+  // ── Phase 2: Audit + Notification ngoài transaction (tránh timeout) ──────
+  await logAudit({ userId: approverId, entityType: 'TRIP', entityId: tripId,
+    action: auditAction, previousState: 'SUBMITTED', newState: newStatus,
+    ipAddress: ipAddress ?? null });
+
+  await createNotification({ recipientId: employeeId,
+    type: newStatus === 'APPROVED' ? 'TRIP_APPROVED' : 'PENDING_LEVEL2_APPROVAL',
+    message: newStatus === 'APPROVED'
+      ? 'Yeu cau cong tac cua ban da duoc phe duyet.'
+      : 'Yeu cau cong tac can phe duyet cap 2 (Travel Admin).',
+    referenceId: tripId, referenceType: 'TRIP' });
+
+  return formatTrip(updated as unknown as Record<string, unknown>);
 }
 
 // ─── rejectTrip ───────────────────────────────────────────────────────────────
@@ -407,7 +408,8 @@ export async function rejectTrip(
 ): Promise<unknown> {
   if (!comment?.trim()) throw Errors.VALIDATION_ERROR({ fieldErrors: { comment: ['Ly do tu choi la bat buoc'] }, formErrors: [] });
 
-  return prisma.$transaction(async (tx) => {
+  // ── Phase 1: DB writes ────────────────────────────────────────────────────
+  const { updated, previousStatus, auditAction, employeeId } = await prisma.$transaction(async (tx) => {
     const trip = await tx.trip.findUnique({
       where: { id: tripId },
       include: { employee: { select: { id: true } } },
@@ -429,16 +431,19 @@ export async function rejectTrip(
 
     const updated = await tx.trip.update({ where: { id: tripId }, data: { status: 'REJECTED' } });
 
-    await logAudit({ userId: approverId, entityType: 'TRIP', entityId: tripId,
-      action: auditAction, previousState: trip.status, newState: 'REJECTED',
-      ipAddress: ipAddress ?? null });
-
-    await createNotification({ recipientId: trip.employee.id, type: 'TRIP_REJECTED',
-      message: `Yeu cau cong tac cua ban bi tu choi. Ly do: ${comment.trim()}`,
-      referenceId: tripId, referenceType: 'TRIP' });
-
-    return formatTrip(updated as unknown as Record<string, unknown>);
+    return { updated, previousStatus: trip.status, auditAction, employeeId: trip.employee.id };
   });
+
+  // ── Phase 2: Audit + Notification ────────────────────────────────────────
+  await logAudit({ userId: approverId, entityType: 'TRIP', entityId: tripId,
+    action: auditAction, previousState: previousStatus, newState: 'REJECTED',
+    ipAddress: ipAddress ?? null });
+
+  await createNotification({ recipientId: employeeId, type: 'TRIP_REJECTED',
+    message: `Yeu cau cong tac cua ban bi tu choi. Ly do: ${comment.trim()}`,
+    referenceId: tripId, referenceType: 'TRIP' });
+
+  return formatTrip(updated as unknown as Record<string, unknown>);
 }
 
 // ─── closeTrip ────────────────────────────────────────────────────────────────
@@ -447,7 +452,8 @@ export async function closeTrip(
   financeId: string,
   ipAddress?: string
 ): Promise<unknown> {
-  return prisma.$transaction(async (tx) => {
+  // ── Phase 1: DB writes ────────────────────────────────────────────────────
+  const { updated, previousStatus, employeeId } = await prisma.$transaction(async (tx) => {
     const trip = await tx.trip.findUnique({
       where: { id: tripId },
       include: { expense: true, employee: { select: { id: true } } },
@@ -466,16 +472,19 @@ export async function closeTrip(
 
     await tx.expense.update({ where: { id: expense.id }, data: { status: 'CLOSED' } });
 
-    await logAudit({ userId: financeId, entityType: 'TRIP', entityId: tripId,
-      action: AuditActions.TRIP_CLOSED, previousState: trip.status, newState: 'CLOSED',
-      ipAddress: ipAddress ?? null });
-
-    await createNotification({ recipientId: trip.employee.id, type: 'TRIP_CLOSED',
-      message: 'Ho so cong tac cua ban da duoc dong tat. Cam on!',
-      referenceId: tripId, referenceType: 'TRIP' });
-
-    return formatTrip(updated as unknown as Record<string, unknown>);
+    return { updated, previousStatus: trip.status, employeeId: trip.employee.id };
   });
+
+  // ── Phase 2: Audit + Notification ────────────────────────────────────────
+  await logAudit({ userId: financeId, entityType: 'TRIP', entityId: tripId,
+    action: AuditActions.TRIP_CLOSED, previousState: previousStatus, newState: 'CLOSED',
+    ipAddress: ipAddress ?? null });
+
+  await createNotification({ recipientId: employeeId, type: 'TRIP_CLOSED',
+    message: 'Ho so cong tac cua ban da duoc dong tat. Cam on!',
+    referenceId: tripId, referenceType: 'TRIP' });
+
+  return formatTrip(updated as unknown as Record<string, unknown>);
 }
 
 export { prisma };

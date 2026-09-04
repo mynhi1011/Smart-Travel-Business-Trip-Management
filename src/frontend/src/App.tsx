@@ -119,12 +119,19 @@ function formatDate(value: string | null): string {
 
 function toFrontendTrip(trip: BackendTrip): Trip {
   const statusMap: Record<string, TripStatus> = {
-    DRAFT: "DRAFT", SUBMITTED: "SUBMITTED", MANAGER_REVIEWING: "SUBMITTED",
-    PENDING_ADMIN_APPROVAL: "PENDING_ADMIN_APPROVAL", APPROVED: "APPROVED",
-    ONGOING: "TRIP_IN_PROGRESS", EXPENSE_DRAFT: "TRIP_IN_PROGRESS",
-    EXPENSE_SUBMITTED: "EXPENSE_SUBMITTED", EXPENSE_APPROVED: "EXPENSE_SUBMITTED",
-    EXPENSE_REJECTED: "EXPENSE_SUBMITTED", MANAGER_REAPPROVE: "PENDING_MANAGER_ADDITIONAL_APPROVAL",
-    CLOSED: "CLOSED", REJECTED: "REJECTED",
+    DRAFT:                    "DRAFT",
+    SUBMITTED:                "SUBMITTED",
+    MANAGER_REVIEWING:        "SUBMITTED",
+    PENDING_ADMIN_APPROVAL:   "PENDING_ADMIN_APPROVAL",
+    APPROVED:                 "APPROVED",
+    ONGOING:                  "TRIP_IN_PROGRESS",
+    EXPENSE_DRAFT:            "TRIP_IN_PROGRESS",
+    EXPENSE_SUBMITTED:        "EXPENSE_SUBMITTED",
+    EXPENSE_APPROVED:         "CLOSED",        // Finance đã approve → sắp close
+    EXPENSE_REJECTED:         "EXPENSE_SUBMITTED", // bị reject → employee sửa lại
+    MANAGER_REAPPROVE:        "PENDING_MANAGER_ADDITIONAL_APPROVAL",
+    CLOSED:                   "CLOSED",
+    REJECTED:                 "REJECTED",
   };
   return {
     id: trip.id, from: trip.origin, to: trip.destination,
@@ -1078,15 +1085,21 @@ function EmpCreate({ user, onLogout, onSuccess, onCancel }: {
     try {
       const [dd1, mm1, yyyy1] = form.departDate.split("/");
       const [dd2, mm2, yyyy2] = form.returnDate.split("/");
+      const destinationType = MAJOR_CITIES.some(c => form.to.toLowerCase().includes(c))
+        ? "TIER1_CITY" : "OTHER";
       const created = await createTrip({
         origin: form.from,
         destination: form.to,
+        destinationType,
         departureDate: `${yyyy1}-${mm1}-${dd1}`,
         returnDate: `${yyyy2}-${mm2}-${dd2}`,
         purpose: form.purpose,
         estimatedBudget: budget,
-        isUrgent: form.urgent || isLateSubmission,
-        urgencyReason: (form.urgent || isLateSubmission) ? (form.urgentReason || null) : null,
+        // isUrgent là server-computed (workingDays < 3) — không gửi lên
+        // urgencyReason bắt buộc khi server tính isUrgent = true
+        ...(form.urgent || isLateSubmission
+          ? { urgencyReason: form.urgentReason || undefined }
+          : {}),
       });
       await submitTrip(created.id);
       onSuccess();
@@ -1564,8 +1577,8 @@ function ManagerApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const recent     = trips.filter(t => ["PENDING_ADMIN_APPROVAL","APPROVED","REJECTED"].includes(t.status));
 
   async function approve(note: string) {
-    if (!selected || !note.trim()) return;
-    try { await approveTrip(selected.id, note); await reload(); }
+    if (!selected) return;
+    try { await approveTrip(selected.id, note || "Đã phê duyệt"); await reload(); }
     catch (err) { alert(err instanceof Error ? err.message : "Lỗi phê duyệt."); }
     setSelected(null);
   }
@@ -1631,8 +1644,8 @@ function ApprovalDetail({ user, onLogout, trip, level, onApprove, onReject, onBa
   const [note, setNote] = useState("");
   const [noteError, setNoteError] = useState("");
 
-  function tryApprove() { if (!note.trim()) { setNoteError("Ghi chú là bắt buộc khi phê duyệt."); return; } setNoteError(""); onApprove(note); }
-  function tryReject()  { if (!note.trim()) { setNoteError("Lý do từ chối là bắt buộc.");          return; } setNoteError(""); onReject(note);  }
+  function tryApprove() { setNoteError(""); onApprove(note); }
+  function tryReject()  { if (!note.trim()) { setNoteError("Lý do từ chối là bắt buộc."); return; } setNoteError(""); onReject(note); }
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
@@ -1680,11 +1693,11 @@ function ApprovalDetail({ user, onLogout, trip, level, onApprove, onReject, onBa
           <div className="flex flex-col gap-4">
             <Card className="p-5">
               <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-3">
-                Quyết định cấp {level} <span className="text-red-400 font-normal text-xs normal-case">(ghi chú bắt buộc)</span>
+                Quyết định cấp {level}
               </p>
               <div className="mb-3">
-                <FieldLabel>Ghi chú / Lý do <span className="text-red-400">*</span></FieldLabel>
-                <textarea value={note} onChange={e => { setNote(e.target.value); setNoteError(""); }} rows={4} placeholder="Nhập lý do duyệt hoặc từ chối..." className={`w-full border rounded-lg px-3.5 py-2.5 text-sm text-[#1b2f35] placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#1b2f35] resize-none transition ${noteError ? "border-red-300" : "border-gray-200"}`} />
+                <FieldLabel>Ghi chú / Lý do <span className="text-gray-400 font-normal text-xs">(bắt buộc khi từ chối)</span></FieldLabel>
+                <textarea value={note} onChange={e => { setNote(e.target.value); setNoteError(""); }} rows={4} placeholder="Nhập ghi chú hoặc lý do từ chối..." className={`w-full border rounded-lg px-3.5 py-2.5 text-sm text-[#1b2f35] placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#1b2f35] resize-none transition ${noteError ? "border-red-300" : "border-gray-200"}`} />
                 {noteError && <p className="text-xs text-red-500 mt-1">{noteError}</p>}
               </div>
               <div className="flex flex-col gap-2">
