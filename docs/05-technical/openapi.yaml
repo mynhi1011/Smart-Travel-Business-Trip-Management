@@ -4,7 +4,7 @@ info:
   title: Smart Travel & Business Trip Management API
   description: |
     API Contract cho hệ thống quản lý công tác doanh nghiệp.
-    - **Base URL:** `http://localhost:3001/api/v1`
+    - **Base URL:** `http://localhost:5000/api/v1`
     - **Auth:** JWT Bearer (Access Token 15m) + Refresh Token (httpOnly cookie, 7d)
     - **Tiền tệ:** `integer` VND nguyên — ví dụ `1500000` = 1.500.000 VNĐ
     - **Tham chiếu:** `architecture.md`, `data-model.md`, `business-rules.md`
@@ -15,7 +15,7 @@ info:
     name: Academic Use Only
 
 servers:
-  - url: http://localhost:3001/api/v1
+  - url: http://localhost:5000/api/v1
     description: Local Development
 
 # ─────────────────────────────────────────────────────────────

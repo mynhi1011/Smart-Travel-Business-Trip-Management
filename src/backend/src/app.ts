@@ -10,6 +10,8 @@
  */
 
 import express, { Application, Request, Response } from 'express';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -43,11 +45,16 @@ export function createApp(): Application {
 
   // ── 2. CORS ────────────────────────────────────────────────────────────────
   const allowedOrigins = (process.env['CORS_ORIGIN'] ?? 'http://localhost:5173').split(',');
+  // Luôn cho phép same-origin (full-local mode: frontend served từ Express)
+  const port = process.env['PORT'] ?? '5000';
+  const sameOrigins = [`http://localhost:${port}`, `http://127.0.0.1:${port}`];
+  const allAllowedOrigins = [...new Set([...allowedOrigins, ...sameOrigins])];
+
   app.use(
     cors({
       origin: (origin, callback) => {
         // Cho phép request không có origin (mobile client, curl, Postman)
-        if (!origin || allowedOrigins.includes(origin)) {
+        if (!origin || allAllowedOrigins.includes(origin)) {
           callback(null, true);
         } else {
           callback(new Error(`CORS blocked: ${origin}`));
@@ -108,16 +115,33 @@ export function createApp(): Application {
   // Protected routes — authGuard được apply bên trong từng router
   app.use('/api/v1/trips', tripsRouter);
   app.use('/api/v1/trips', itineraryRouter);   // /api/v1/trips/:id/itinerary
-  app.use('/api/v1/trips', expensesRouter);    // /api/v1/trips/:id/expenses
+  app.use('/api/v1/trips', expensesRouter);    // /api/v1/trips/:id/expense
   app.use('/api/v1/ai', aiRouter);
   app.use('/api/v1/dashboard', dashboardRouter);
   app.use('/api/v1/notifications', notificationsRouter);
   app.use('/api/v1/trips', pdfRouter);         // /api/v1/trips/:id/export-pdf
 
-  // ── 9. 404 Handler ─────────────────────────────────────────────────────────
+  // ── 9. Frontend SPA (full-local: http://localhost:5000) ───────────────────
+  // API routes luôn được đăng ký trước static middleware để không bị SPA fallback.
+  const frontendDist = path.resolve(process.cwd(), '../frontend/dist');
+  const frontendIndex = path.join(frontendDist, 'index.html');
+  if (existsSync(frontendIndex)) {
+    app.use(express.static(frontendDist));
+    app.get('*', (req: Request, res: Response, next) => {
+      if (req.path.startsWith('/api/') || req.path === '/health') {
+        next();
+        return;
+      }
+      res.sendFile(frontendIndex, (err) => {
+        if (err) next(err);
+      });
+    });
+  }
+
+  // ── 10. 404 Handler ────────────────────────────────────────────────────────
   app.use(notFoundHandler);
 
-  // ── 10. Global Error Handler (phải là middleware cuối cùng) ────────────────
+  // ── 11. Global Error Handler (phải là middleware cuối cùng) ────────────────
   app.use(errorHandler);
 
   return app;

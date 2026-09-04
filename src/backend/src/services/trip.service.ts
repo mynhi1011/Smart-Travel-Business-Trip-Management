@@ -249,81 +249,95 @@ export async function submitTrip(
   userId: string,
   ipAddress?: string
 ): Promise<unknown> {
-  return prisma.$transaction(async (tx) => {
+  // ── Phase 1: DB transaction (lock → policy check → update) ──────────────────
+  // logAudit + createNotification di chuyển ra NGOÀI transaction
+  // để tránh Prisma interactive transaction timeout (default 5s)
+  const { updatedTrip, policyResult, managerId } = await prisma.$transaction(async (tx) => {
     // Lock row
-    const trips = await tx.$queryRaw<Array<{ id: string; status: string; employee_id: string; estimated_budget: number; hotel_cost_per_night: number | null; per_diem_budget: number | null; departure_date: Date; created_at: Date; destination_type: string; is_urgent: boolean; hotel_nights: number | null }>>
-      `SELECT * FROM trips WHERE id = ${tripId} LIMIT 1`;
+    const trips = await tx.$queryRaw<Array<{
+      id: string; status: string; employee_id: string;
+      estimated_budget: number; hotel_cost_per_night: number | null;
+      per_diem_budget: number | null; departure_date: Date; return_date: Date;
+      created_at: Date; destination_type: string; is_urgent: boolean; hotel_nights: number | null;
+    }>>`SELECT * FROM trips WHERE id = ${tripId} LIMIT 1`;
     const trip = trips[0];
     if (!trip)                          throw Errors.TRIP_NOT_FOUND();
     if (trip.employee_id !== userId)    throw Errors.FORBIDDEN();
     if (trip.status !== 'DRAFT')        throw Errors.INVALID_STATUS_TRANSITION(trip.status, 'SUBMITTED');
 
-    // Lấy jobGrade của employee
     const emp = await tx.user.findUnique({ where: { id: userId }, select: { jobGrade: true, managerId: true } });
-    const jobGrade    = emp?.jobGrade    ?? 'STAFF';
-    const managerId   = emp?.managerId  ?? null;
+    const jobGrade  = emp?.jobGrade  ?? 'STAFF';
 
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const depDate = new Date(trip.departure_date);
+    const retDate = new Date(trip.return_date);
+    const tripDays = computeTripDays(depDate, retDate);
     const wDays = countWorkingDays(today, depDate);
-    const tripDays = computeTripDays(depDate, new Date(trip.departure_date)); // reuse
 
-    // Run policy check
     const policyResult = runPolicyCheck({
       jobGrade,
       destinationType:   trip.destination_type,
       estimatedBudget:   trip.estimated_budget,
       hotelCostPerNight: trip.hotel_cost_per_night ?? undefined,
       perDiemBudget:     trip.per_diem_budget      ?? undefined,
-      tripDays: computeTripDays(depDate, new Date(trip.departure_date)),
+      tripDays,
       departureDate: depDate,
       createdAt:     new Date(trip.created_at),
     });
 
-    // Upsert policy_check_results
+    const violationsJson = JSON.stringify(policyResult.violations);
     await tx.policyCheckResult.upsert({
       where:  { tripId },
       create: {
         tripId, passed: policyResult.passed,
-        violations:            JSON.stringify(policyResult.violations),
-        violationCount:        policyResult.violationCount,
+        violations:             violationsJson,
+        violationCount:         policyResult.violationCount,
         requiresLevel2Approval: policyResult.requiresLevel2Approval,
       },
       update: {
         passed: policyResult.passed,
-        violations:            JSON.stringify(policyResult.violations),
-        violationCount:        policyResult.violationCount,
+        violations:             violationsJson,
+        violationCount:         policyResult.violationCount,
         requiresLevel2Approval: policyResult.requiresLevel2Approval,
       },
     });
 
-    // Update trip status
-    const updated = await tx.trip.update({
+    const updatedTrip = await tx.trip.update({
       where: { id: tripId },
       data: {
-        status:        'SUBMITTED',
-        isUrgent:      wDays < 3,
+        status:         'SUBMITTED',
+        isUrgent:       wDays < 3,
         requiresLevel2: policyResult.requiresLevel2Approval,
-        submittedAt:   new Date(),
+        submittedAt:    new Date(),
       },
       include: { policyCheckResult: true },
     });
 
-    await logAudit({ userId, entityType: 'TRIP', entityId: tripId,
-      action: AuditActions.TRIP_SUBMITTED, previousState: 'DRAFT', newState: 'SUBMITTED',
-      metadata: { policyPassed: policyResult.passed, violationCount: policyResult.violationCount },
-      ipAddress: ipAddress ?? null });
-
-    // Notify Manager
-    if (managerId) {
-      await createNotification({ recipientId: managerId, type: 'PENDING_LEVEL1_APPROVAL',
-        message: `Yeu cau cong tac moi can phe duyet cap 1.`,
-        referenceId: tripId, referenceType: 'TRIP' });
-    }
-
-    void tripDays; // used above
-    return formatTrip(updated as unknown as Record<string, unknown>);
+    return { updatedTrip, policyResult, managerId: emp?.managerId ?? null };
   });
+
+  // ── Phase 2: Side effects ngoài transaction (audit + notification) ───────────
+  await logAudit({ userId, entityType: 'TRIP', entityId: tripId,
+    action: AuditActions.TRIP_SUBMITTED, previousState: 'DRAFT', newState: 'SUBMITTED',
+    metadata: { policyPassed: policyResult.passed, violationCount: policyResult.violationCount },
+    ipAddress: ipAddress ?? null });
+
+  if (managerId) {
+    await createNotification({ recipientId: managerId, type: 'PENDING_LEVEL1_APPROVAL',
+      message: 'Yeu cau cong tac moi can phe duyet cap 1.',
+      referenceId: tripId, referenceType: 'TRIP' });
+  }
+
+  // Parse violations string → array trước khi trả về
+  const policyCheckResult = updatedTrip.policyCheckResult ? {
+    ...updatedTrip.policyCheckResult,
+    violations: JSON.parse(updatedTrip.policyCheckResult.violations as string ?? '[]'),
+  } : null;
+
+  return {
+    ...formatTrip(updatedTrip as unknown as Record<string, unknown>),
+    policyCheckResult,
+  };
 }
 
 // ─── approveTrip ─────────────────────────────────────────────────────────────

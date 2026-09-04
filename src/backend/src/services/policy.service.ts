@@ -149,9 +149,19 @@ export function runPolicyCheck(input: PolicyCheckInput): PolicyCheckResult {
     });
   }
 
-  // ── BR-TR-04: Budget threshold → level 2 ──────────────────────────────────
-  const requiresLevel2 =
-    input.estimatedBudget > LEVEL2_BUDGET_THRESHOLD || violations.length > 0;
+  // ── BR-TR-04: Budget threshold → violation code + level 2 ───────────────────
+  if (input.estimatedBudget > LEVEL2_BUDGET_THRESHOLD) {
+    violations.push({
+      code: 'POLICY_VIOLATION_BUDGET_THRESHOLD',
+      detail: `Tổng dự toán ${input.estimatedBudget.toLocaleString('vi-VN')} VNĐ vượt ngưỡng ${LEVEL2_BUDGET_THRESHOLD.toLocaleString('vi-VN')} VNĐ — bắt buộc phê duyệt cấp 2`,
+      severity: 'WARNING',
+      rule: 'BR-TR-04',
+      limit: LEVEL2_BUDGET_THRESHOLD,
+      actual: input.estimatedBudget,
+    });
+  }
+
+  const requiresLevel2 = violations.length > 0;
 
   return {
     passed: violations.length === 0,

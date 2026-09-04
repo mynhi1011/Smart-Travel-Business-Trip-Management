@@ -1,12 +1,23 @@
-import { useState, useRef, useEffect } from "react";
+﻿import { useState, useRef, useEffect } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { ApiError, authApi, type BackendUser } from "./services/api";
+import { listTrips, createTrip, submitTrip, approveTrip, rejectTrip, closeTrip, type BackendTrip } from "./services/trips";
+import {
+  getItinerary, addItineraryItem, updateItineraryItem, deleteItineraryItem,
+  type BackendItineraryItem, type ItineraryItemInput, type ItineraryCategory, type ItineraryTimeSlot,
+} from "./services/itinerary";
+import {
+  getExpense, createExpense, addExpenseItem,
+  submitExpense, approveExpense, rejectExpense, reapproveExpense,
+  type BackendExpense, type ExpenseCategory,
+} from "./services/expenses";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // TYPES
 // ══════════════════════════════════════════════════════════════════════════════
 
 type Role = "employee" | "manager" | "admin" | "finance";
-type User = { email: string; password: string; name: string; role: Role; title: string };
+type User = { id?: string; email: string; password?: string; name: string; role: Role; title: string };
 
 type TripStatus =
   | "DRAFT" | "SUBMITTED"
@@ -54,10 +65,10 @@ type ItineraryDay  = { day: string; items: ItineraryItem[] };
 // ══════════════════════════════════════════════════════════════════════
 
 const USERS: User[] = [
-  { email: "nhanvien@smarttravel.vn",    password: "123456", name: "Nguyễn Văn Nam", role: "employee", title: "Sales Executive" },
-  { email: "truongphong@smarttravel.vn", password: "123456", name: "Trần Thị Lan",   role: "manager",  title: "Sales Manager" },
-  { email: "admin@smarttravel.vn",       password: "123456", name: "Lê Minh Tuấn",   role: "admin",    title: "Travel Admin" },
-  { email: "ketoan@smarttravel.vn",      password: "123456", name: "Phạm Thu Hà",    role: "finance",  title: "Finance Officer" },
+  { email: "nhanvien@smarttravel.vn",    password: "12345678", name: "Nguyễn Văn Nam", role: "employee", title: "Sales Executive" },
+  { email: "truongphong@smarttravel.vn", password: "12345678", name: "Trần Thị Lan",   role: "manager",  title: "Sales Manager" },
+  { email: "admin@smarttravel.vn",       password: "12345678", name: "Lê Minh Tuấn",   role: "admin",    title: "Travel Admin" },
+  { email: "ketoan@smarttravel.vn",      password: "12345678", name: "Phạm Thu Hà",    role: "finance",  title: "Finance Officer" },
 ];
 
 const EXPENSE_CATEGORIES = [
@@ -92,56 +103,9 @@ function parseDMY(s: string): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
-const DEFAULT_EXPENSES = (): ExpenseItem[] => [
-  { id: "1", date: "", category: "flight",    label: "Vé máy bay",         description: "", budgeted: 1_900_000, actual: 0 },
-  { id: "2", date: "", category: "transport", label: "Xe đưa đón sân bay", description: "", budgeted:   200_000, actual: 0 },
-  { id: "3", date: "", category: "hotel",     label: "Khách sạn",          description: "", budgeted: 1_600_000, actual: 0 },
-  { id: "4", date: "", category: "meal",      label: "Phụ cấp ăn uống",   description: "", budgeted:   400_000, actual: 0 },
-  { id: "5", date: "", category: "other",     label: "Chi phí khác",       description: "", budgeted:         0, actual: 0 },
-];
+// DEFAULT_EXPENSES removed — expense data now loaded from backend API
 
-let _trips: Trip[] = [
-  {
-    id: "TR-2026-9141", from: "Đà Nẵng", to: "TP.HCM",
-    departDate: "02/07/2026", returnDate: "04/07/2026",
-    budget: 8_000_000, status: "APPROVED", managerApproved: true,
-    employeeId: "nhanvien@smarttravel.vn", employeeName: "Nguyễn Văn Nam",
-    purpose: "Gặp khách hàng ABC Corp để chốt hợp đồng phân phối Q3",
-    submittedAt: "28/06/2026", managerNote: "Duyệt — mục đích rõ ràng, ngân sách hợp lý.",
-  },
-  {
-    id: "TR-2026-0098", from: "Đà Nẵng", to: "Hà Nội",
-    departDate: "12/07/2026", returnDate: "14/07/2026",
-    budget: 6_200_000, status: "SUBMITTED",
-    employeeId: "nhanvien@smarttravel.vn", employeeName: "Nguyễn Văn Nam",
-    purpose: "Họp triển khai dự án Q3 tại văn phòng Hà Nội",
-    submittedAt: "10/07/2026", urgent: true, urgentReason: "Họp định kỳ theo lịch đối tác",
-    policyViolations: [{ level: "warning", code: "URGENT_TRIP_NOTICE", message: "Chuyến đi khẩn cấp — nộp dưới 3 ngày làm việc trước chuyến đi" }],
-  },
-  {
-    id: "TR-2026-0055", from: "HCM", to: "Hà Nội",
-    departDate: "05/07/2026", returnDate: "09/07/2026",
-    budget: 25_000_000, status: "PENDING_ADMIN_APPROVAL", managerApproved: true,
-    employeeId: "nhanvien@smarttravel.vn", employeeName: "Nguyễn Văn Nam",
-    purpose: "Hội nghị khách hàng quốc gia + ký kết hợp đồng với 3 đối tác chiến lược",
-    submittedAt: "01/07/2026", managerNote: "Duyệt — ngân sách >20M cần Travel Admin xét duyệt.",
-    policyViolations: [{ level: "error", code: "OVER_20M", message: "Ngân sách 25,000,000đ vượt ngưỡng 20M — bắt buộc phê duyệt Travel Admin" }],
-  },
-  {
-    id: "TR-2026-0142", from: "Đà Nẵng", to: "TP.HCM",
-    departDate: "30/08/2026", returnDate: "02/09/2026",
-    budget: 8_400_000, status: "EXPENSE_SUBMITTED", managerApproved: true, adminApproved: false,
-    employeeId: "nhanvien@smarttravel.vn", employeeName: "Nguyễn Văn Nam",
-    purpose: "Ký kết hợp đồng phân phối mới với XYZ Corp", submittedAt: "27/08/2026",
-    actualExpenses: [
-      { id: "1", date: "30/08/2026", category: "flight",    label: "Vé máy bay",         description: "VJ130 Đà Nẵng - HCM",     budgeted: 1_900_000, actual: 2_100_000, receipt: "ve_may_bay.jpg" },
-      { id: "2", date: "30/08/2026", category: "transport", label: "Xe đưa đón sân bay", description: "Grab từ TSN về Q1",        budgeted:   200_000, actual:   180_000, receipt: "" },
-      { id: "3", date: "30/08/2026", category: "hotel",     label: "Khách sạn 3 đêm",    description: "Mường Thanh Luxury",       budgeted: 1_600_000, actual: 1_950_000, receipt: "hotel.pdf" },
-      { id: "4", date: "30/08/2026", category: "meal",      label: "Ăn uống 3 ngày",     description: "Phụ cấp theo quy định",    budgeted:   400_000, actual:   430_000, receipt: "" },
-      { id: "5", date: "02/09/2026", category: "other",     label: "Chi phí phát sinh",  description: "In ấn tài liệu hợp đồng", budgeted:         0, actual:   250_000, receipt: "receipt.jpg" },
-    ],
-  },
-];
+// _trips mock removed — trip data now loaded from backend API
 
 let _notifications: Notification[] = [
   { id: "n1", toUser: "nhanvien@smarttravel.vn",    message: "TR-2026-9141 đã được Manager phê duyệt.",                     type: "success", read: false, createdAt: "28/06/2026", tripId: "TR-2026-9141" },
@@ -149,10 +113,43 @@ let _notifications: Notification[] = [
   { id: "n3", toUser: "admin@smarttravel.vn",       message: "TR-2026-0055 đang chờ phê duyệt cấp 2 (ngân sách >20M).",   type: "warning", read: false, createdAt: "01/07/2026", tripId: "TR-2026-0055" },
 ];
 
+function formatDate(value: string | null): string {
+  return value ? new Intl.DateTimeFormat("vi-VN").format(new Date(value)) : "—";
+}
+
+function toFrontendTrip(trip: BackendTrip): Trip {
+  const statusMap: Record<string, TripStatus> = {
+    DRAFT: "DRAFT", SUBMITTED: "SUBMITTED", MANAGER_REVIEWING: "SUBMITTED",
+    PENDING_ADMIN_APPROVAL: "PENDING_ADMIN_APPROVAL", APPROVED: "APPROVED",
+    ONGOING: "TRIP_IN_PROGRESS", EXPENSE_DRAFT: "TRIP_IN_PROGRESS",
+    EXPENSE_SUBMITTED: "EXPENSE_SUBMITTED", EXPENSE_APPROVED: "EXPENSE_SUBMITTED",
+    EXPENSE_REJECTED: "EXPENSE_SUBMITTED", MANAGER_REAPPROVE: "PENDING_MANAGER_ADDITIONAL_APPROVAL",
+    CLOSED: "CLOSED", REJECTED: "REJECTED",
+  };
+  return {
+    id: trip.id, from: trip.origin, to: trip.destination,
+    departDate: formatDate(trip.departureDate), returnDate: formatDate(trip.returnDate),
+    budget: trip.estimatedBudget, status: statusMap[trip.status] ?? "DRAFT",
+    employeeId: trip.employeeId, employeeName: trip.employee?.name ?? "—",
+    purpose: trip.purpose, submittedAt: formatDate(trip.submittedAt),
+    urgent: trip.isUrgent, urgentReason: trip.urgencyReason ?? undefined,
+    policyViolations: trip.policyCheckResult?.violations.map((v) => ({
+      level: v.severity === "BLOCKER" ? "error" : "warning",
+      code: v.code, message: v.detail,
+    })),
+  };
+}
+
 const useTrips = () => {
-  const [trips, setTrips] = useState<Trip[]>(_trips);
-  const update = (fn: (t: Trip[]) => Trip[]) => { _trips = fn(_trips); setTrips([..._trips]); };
-  return { trips, update };
+  const [trips, setTrips] = useState<Trip[]>([]);
+  const [loading, setLoading] = useState(true);
+  const reload = async () => {
+    setLoading(true);
+    try { setTrips((await listTrips()).map(toFrontendTrip)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void reload(); }, []);
+  return { trips, loading, reload };
 };
 
 const useNotifications = (userEmail: string) => {
@@ -629,6 +626,257 @@ function ItineraryList({ initial, departDate, readOnly = false }: { initial: Iti
   );
 }
 
+// ─── Backend → UI category mapping ───────────────────────────────────────────
+function mapBackendCategory(cat: string): string {
+  const map: Record<string, string> = {
+    ACCOMMODATION: "hotel", TRANSPORT: "transport",
+    MEAL: "meal", PER_DIEM: "meal", OTHER: "other",
+  };
+  return map[cat] ?? cat.toLowerCase();
+}
+
+// ─── ExpenseItemForm — form thêm khoản chi mới vào expense ───────────────────
+function ExpenseItemForm({ tripId, onAdded }: { tripId: string; onAdded: () => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [form, setForm] = useState({ expenseDate: "", category: "OTHER" as ExpenseCategory, amount: "", description: "" });
+
+  async function handleAdd(e: React.FormEvent) {
+    e.preventDefault();
+    if (!form.expenseDate || !form.amount || !form.description.trim()) { setErr("Vui lòng điền đầy đủ."); return; }
+    setSaving(true); setErr("");
+    try {
+      const [dd, mm, yyyy] = form.expenseDate.split("/");
+      // Ensure expense header exists first
+      try { await createExpense(tripId); } catch { /* already exists */ }
+      await addExpenseItem(tripId, {
+        expenseDate: `${yyyy}-${mm}-${dd}`,
+        category: form.category,
+        amount: Number(form.amount),
+        description: form.description.trim(),
+      });
+      await onAdded();
+      setForm({ expenseDate: "", category: "OTHER", amount: "", description: "" });
+      setOpen(false);
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Lỗi thêm khoản chi.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const BACKEND_CATEGORIES: { key: ExpenseCategory; label: string }[] = [
+    { key: "ACCOMMODATION", label: "Lưu trú" },
+    { key: "TRANSPORT", label: "Di chuyển" },
+    { key: "MEAL", label: "Ăn uống" },
+    { key: "PER_DIEM", label: "Phụ cấp" },
+    { key: "OTHER", label: "Khác" },
+  ];
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="mt-4 text-sm font-semibold text-emerald-600 hover:underline">
+        + Thêm khoản chi
+      </button>
+    );
+  }
+
+  return (
+    <form onSubmit={handleAdd} className="mt-4 border border-emerald-200 rounded-xl p-4 bg-emerald-50/40 flex flex-col gap-3">
+      <p className="text-xs font-bold text-emerald-700 uppercase tracking-wider">Thêm khoản chi mới</p>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <FieldLabel>Ngày chi <span className="text-red-400">*</span></FieldLabel>
+          <DatePicker value={form.expenseDate} onChange={v => setForm(f => ({ ...f, expenseDate: v }))} />
+        </div>
+        <div>
+          <FieldLabel>Danh mục <span className="text-red-400">*</span></FieldLabel>
+          <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value as ExpenseCategory }))} className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1b2f35]">
+            {BACKEND_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <FieldLabel>Số tiền (đ) <span className="text-red-400">*</span></FieldLabel>
+          <input type="number" min={1} value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} className="w-full border border-gray-200 rounded-lg px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1b2f35]" placeholder="0" />
+        </div>
+        <div>
+          <FieldLabel>Mô tả <span className="text-red-400">*</span></FieldLabel>
+          <TextInput value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Tên khoản chi..." />
+        </div>
+      </div>
+      {err && <p className="text-xs text-red-500">{err}</p>}
+      <div className="flex gap-2">
+        <button type="submit" disabled={saving} className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-50">
+          {saving ? "Đang thêm..." : "Thêm"}
+        </button>
+        <button type="button" onClick={() => setOpen(false)} className="px-4 py-2 text-xs font-semibold text-gray-500 border border-gray-200 rounded-lg">Huỷ</button>
+      </div>
+    </form>
+  );
+}
+
+// ─── ItineraryListServer — hiển thị và chỉnh sửa itinerary từ backend ────────
+const TIME_SLOT_LABEL: Record<string, string> = {
+  MORNING: "Sáng", AFTERNOON: "Chiều", EVENING: "Tối", ALL_DAY: "Cả ngày",
+};
+const ITIN_CATEGORIES: { key: ItineraryCategory; label: string }[] = [
+  { key: "MEETING", label: "Họp" },
+  { key: "ACCOMMODATION", label: "Lưu trú" },
+  { key: "TRANSPORT", label: "Di chuyển" },
+  { key: "MEAL", label: "Ăn uống" },
+  { key: "OTHER", label: "Khác" },
+];
+
+function ItineraryListServer({ items, readOnly, onAdd, onUpdate, onDelete }: {
+  items: BackendItineraryItem[];
+  tripId?: string;
+  departDate?: string;
+  readOnly?: boolean;
+  onAdd: (input: ItineraryItemInput) => Promise<void>;
+  onUpdate: (itemId: string, input: Partial<ItineraryItemInput>) => Promise<void>;
+  onDelete: (itemId: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Partial<ItineraryItemInput>>({});
+  const [addOpen, setAddOpen] = useState(false);
+  const [newItem, setNewItem] = useState<ItineraryItemInput>({
+    itemDate: "", timeSlot: "MORNING", location: "", activity: "", category: "MEETING", estimatedCost: 0,
+  });
+  const [saving, setSaving] = useState(false);
+
+  // Group by dayNumber
+  const byDay = items.reduce<Record<number, BackendItineraryItem[]>>((acc, it) => {
+    (acc[it.dayNumber] = acc[it.dayNumber] ?? []).push(it);
+    return acc;
+  }, {});
+
+  async function saveEdit(itemId: string) {
+    setSaving(true);
+    try { await onUpdate(itemId, draft); setEditing(null); }
+    finally { setSaving(false); }
+  }
+
+  async function handleAdd(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newItem.itemDate || !newItem.location || !newItem.activity) return;
+    setSaving(true);
+    try { await onAdd(newItem); setAddOpen(false); setNewItem({ itemDate: "", timeSlot: "MORNING", location: "", activity: "", category: "MEETING", estimatedCost: 0 }); }
+    finally { setSaving(false); }
+  }
+
+  function formatItemDate(iso: string) {
+    return new Date(iso).toLocaleDateString("vi-VN");
+  }
+
+  if (items.length === 0 && readOnly) {
+    return <p className="text-sm text-gray-400 text-center py-6">Chưa có lịch trình.</p>;
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      {Object.keys(byDay).sort((a, b) => Number(a) - Number(b)).map(dayNum => (
+        <div key={dayNum}>
+          <p className="text-xs font-bold text-[#1b2f35] mb-2 pb-1.5 border-b border-gray-100">Ngày {dayNum}</p>
+          <div className="flex flex-col gap-2">
+            {byDay[Number(dayNum)].map(item => (
+              <div key={item.id} className="group flex gap-3 rounded-lg px-2 py-2 hover:bg-gray-50">
+                <span className="text-xs font-semibold text-gray-400 w-16 shrink-0 pt-1">{TIME_SLOT_LABEL[item.timeSlot] ?? item.timeSlot}</span>
+                <div className="flex-1 min-w-0">
+                  {editing === item.id ? (
+                    <div className="flex flex-col gap-2">
+                      <TextInput value={draft.activity ?? item.activity} onChange={e => setDraft(d => ({ ...d, activity: e.target.value }))} placeholder="Hoạt động" />
+                      <TextInput value={draft.location ?? item.location} onChange={e => setDraft(d => ({ ...d, location: e.target.value }))} placeholder="Địa điểm" />
+                      <div className="flex gap-2">
+                        <button onClick={() => saveEdit(item.id)} disabled={saving} className="px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 rounded-md disabled:opacity-50">Lưu</button>
+                        <button onClick={() => setEditing(null)} className="px-3 py-1.5 text-xs text-gray-500 border border-gray-200 rounded-md">Huỷ</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="text-sm font-semibold text-[#1b2f35]">{item.activity}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{item.location} · {formatItemDate(item.itemDate)}</p>
+                      {item.estimatedCost > 0 && <p className="text-xs text-gray-400">{item.estimatedCost.toLocaleString("vi-VN")}đ</p>}
+                    </div>
+                  )}
+                </div>
+                {editing !== item.id && !readOnly && (
+                  <div className="flex items-start gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 pt-0.5">
+                    <button onClick={() => { setDraft({}); setEditing(item.id); }} className="p-1.5 rounded-md text-gray-400 hover:text-emerald-600 hover:bg-emerald-50">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828A2 2 0 0110 16H8v-2a2 2 0 01.586-1.414z" /></svg>
+                    </button>
+                    <button onClick={() => onDelete(item.id)} className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4h6v3M4 7h16" /></svg>
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      {!readOnly && (
+        addOpen ? (
+          <form onSubmit={handleAdd} className="border border-emerald-200 rounded-xl p-4 bg-emerald-50/40 flex flex-col gap-3">
+            <p className="text-xs font-bold text-emerald-700 uppercase tracking-wider">Thêm mục lịch trình</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div><FieldLabel>Ngày *</FieldLabel><DatePicker value={newItem.itemDate.replace(/-(\d+)-(\d+)$/, '/$2/$1').replace(/^(\d+)-/, '$2-').split('-').reverse().join('/') || ""} onChange={v => { const [dd,mm,yyyy] = v.split('/'); setNewItem(f => ({ ...f, itemDate: `${yyyy}-${mm}-${dd}` })); }} /></div>
+              <div><FieldLabel>Thời gian</FieldLabel>
+                <select value={newItem.timeSlot} onChange={e => setNewItem(f => ({ ...f, timeSlot: e.target.value as ItineraryTimeSlot }))} className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1b2f35]">
+                  {(['MORNING','AFTERNOON','EVENING','ALL_DAY'] as ItineraryTimeSlot[]).map(s => <option key={s} value={s}>{TIME_SLOT_LABEL[s]}</option>)}
+                </select>
+              </div>
+            </div>
+            <div><FieldLabel>Hoạt động *</FieldLabel><TextInput value={newItem.activity} onChange={e => setNewItem(f => ({ ...f, activity: e.target.value }))} placeholder="Họp, di chuyển..." /></div>
+            <div><FieldLabel>Địa điểm *</FieldLabel><TextInput value={newItem.location} onChange={e => setNewItem(f => ({ ...f, location: e.target.value }))} placeholder="Tên địa điểm" /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><FieldLabel>Danh mục</FieldLabel>
+                <select value={newItem.category} onChange={e => setNewItem(f => ({ ...f, category: e.target.value as ItineraryCategory }))} className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1b2f35]">
+                  {ITIN_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+                </select>
+              </div>
+              <div><FieldLabel>Chi phí ước tính (đ)</FieldLabel><input type="number" min={0} value={newItem.estimatedCost ?? 0} onChange={e => setNewItem(f => ({ ...f, estimatedCost: Number(e.target.value) }))} className="w-full border border-gray-200 rounded-lg px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1b2f35]" /></div>
+            </div>
+            <div className="flex gap-2">
+              <button type="submit" disabled={saving} className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-50">{saving ? "Đang thêm..." : "Thêm"}</button>
+              <button type="button" onClick={() => setAddOpen(false)} className="px-4 py-2 text-xs text-gray-500 border border-gray-200 rounded-lg">Huỷ</button>
+            </div>
+          </form>
+        ) : (
+          <button onClick={() => setAddOpen(true)} className="text-sm font-semibold text-emerald-600 hover:underline">+ Thêm mục lịch trình</button>
+        )
+      )}
+    </div>
+  );
+}
+
+// ─── ApprovalItineraryPreview — read-only itinerary preview for approver ─────
+function ApprovalItineraryPreview({ tripId }: { tripId: string }) {
+  const [items, setItems] = useState<BackendItineraryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    getItinerary(tripId).then(r => setItems(r.items)).catch(() => {}).finally(() => setLoading(false));
+  }, [tripId]);
+  if (loading) return <p className="text-xs text-gray-400">Đang tải lịch trình...</p>;
+  if (items.length === 0) return <p className="text-xs text-gray-400">Chưa có lịch trình.</p>;
+  const preview = items.slice(0, 5);
+  return (
+    <div className="flex flex-col gap-1.5">
+      {preview.map(it => (
+        <div key={it.id} className="flex gap-2 text-xs">
+          <span className="text-gray-400 w-14 shrink-0">{TIME_SLOT_LABEL[it.timeSlot] ?? it.timeSlot}</span>
+          <span className="font-medium text-[#1b2f35]">{it.activity}</span>
+          <span className="text-gray-400">— {it.location}</span>
+        </div>
+      ))}
+      {items.length > 5 && <p className="text-xs text-gray-400">...và {items.length - 5} mục khác</p>}
+    </div>
+  );
+}
+
 function VarianceTable({ items }: { items: ExpenseItem[] }) {
   const totalBudget = items.reduce((s, i) => s + i.budgeted, 0);
   const totalActual = items.reduce((s, i) => s + i.actual,   0);
@@ -689,23 +937,17 @@ function VarianceTable({ items }: { items: ExpenseItem[] }) {
 }
 
 function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
-  const { trips, update } = useTrips();
-  const { push } = useNotifications(user.email);
+  const { trips, reload } = useTrips();
   const [screen, setScreen] = useState<"dashboard" | "create" | "success" | "itinerary" | "status" | "expense">("dashboard");
   const [selected, setSelected] = useState<Trip | null>(null);
   const [filter, setFilter] = useState<TripStatus | "all">("all");
-  const myTrips = trips.filter(t => t.employeeId === user.email);
+  const myTrips = trips;
 
-  function addTrip(t: Trip) {
-    update(prev => [t, ...prev]);
-    push({ toUser: "truongphong@smarttravel.vn", message: `${t.id} — ${t.employeeName} vừa nộp yêu cầu công tác. Vui lòng xem xét.`, type: "info", tripId: t.id });
-  }
-
-  if (screen === "create")    return <EmpCreate user={user} onLogout={onLogout} onSuccess={() => setScreen("success")} onCancel={() => setScreen("dashboard")} onAdd={addTrip} />;
+  if (screen === "create")    return <EmpCreate user={user} onLogout={onLogout} onSuccess={() => { void reload(); setScreen("success"); }} onCancel={() => setScreen("dashboard")} />;
   if (screen === "success")   return <EmpSuccess user={user} onLogout={onLogout} onBack={() => setScreen("dashboard")} />;
   if (screen === "itinerary" && selected) return <EmpItinerary user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} />;
   if (screen === "status"    && selected) return <EmpStatus    user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} />;
-  if (screen === "expense"   && selected) return <EmpExpense   user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} onSave={exp => { update(prev => prev.map(t => t.id === selected.id ? { ...t, actualExpenses: exp, status: "EXPENSE_SUBMITTED" } : t)); push({ toUser: "ketoan@smarttravel.vn", message: `${selected.id} — ${user.name} đã nộp báo cáo chi phí. Vui lòng xem xét.`, type: "info", tripId: selected.id }); setScreen("dashboard"); }} />;
+  if (screen === "expense"   && selected) return <EmpExpense   user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} onSave={async () => { await reload(); setScreen("dashboard"); }} />;
 
   const STATUS_FILTERS: TripStatus[] = ["SUBMITTED", "APPROVED_MANAGER", "PENDING_ADMIN_APPROVAL", "APPROVED", "TRIP_IN_PROGRESS", "EXPENSE_SUBMITTED", "PENDING_MANAGER_ADDITIONAL_APPROVAL", "CLOSED", "REJECTED"];
   const filtered = myTrips.filter(t => filter === "all" || t.status === filter);
@@ -744,7 +986,7 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                   {trip.status === "APPROVED" && (
                     <>
                       <button onClick={() => { setSelected(trip); setScreen("itinerary"); }} className="text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors">Lịch trình</button>
-                      <button onClick={() => update(prev => prev.map(t => t.id === trip.id ? { ...t, status: "TRIP_IN_PROGRESS" } : t))} className="text-sm font-medium text-cyan-700 border border-cyan-200 hover:bg-cyan-50 px-3 py-1.5 rounded-lg transition-colors">Bắt đầu chuyến đi</button>
+                      <button onClick={() => void reload()} className="text-sm font-medium text-cyan-700 border border-cyan-200 hover:bg-cyan-50 px-3 py-1.5 rounded-lg transition-colors">Bắt đầu chuyến đi</button>
                     </>
                   )}
                   {trip.status === "TRIP_IN_PROGRESS" && (
@@ -767,8 +1009,8 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   );
 }
 
-function EmpCreate({ user, onLogout, onSuccess, onCancel, onAdd }: {
-  user: User; onLogout: () => void; onSuccess: () => void; onCancel: () => void; onAdd: (t: Trip) => void;
+function EmpCreate({ user, onLogout, onSuccess, onCancel }: {
+  user: User; onLogout: () => void; onSuccess: () => void; onCancel: () => void;
 }) {
   const [step, setStep] = useState(0);
   const [aiGenerated, setAiGenerated] = useState(false);
@@ -832,21 +1074,25 @@ function EmpCreate({ user, onLogout, onSuccess, onCancel, onAdd }: {
     setStep(s => s + 1);
   }
 
-  function submit() {
-    const v = violations.filter(x => x.code !== "PER_DIEM_NOTE");
-    const t: Trip = {
-      id: `TR-2026-${String(Math.floor(Math.random() * 9000) + 1000)}`,
-      from: form.from, to: form.to,
-      departDate: form.departDate, returnDate: form.returnDate,
-      budget, status: "SUBMITTED",
-      employeeId: user.email, employeeName: user.name,
-      purpose: form.purpose,
-      submittedAt: new Date().toLocaleDateString("vi-VN"),
-      policyViolations: v.length ? v : undefined,
-      urgent: form.urgent || isLateSubmission,
-      urgentReason: form.urgentReason || undefined,
-    };
-    onAdd(t); onSuccess();
+  async function submit() {
+    try {
+      const [dd1, mm1, yyyy1] = form.departDate.split("/");
+      const [dd2, mm2, yyyy2] = form.returnDate.split("/");
+      const created = await createTrip({
+        origin: form.from,
+        destination: form.to,
+        departureDate: `${yyyy1}-${mm1}-${dd1}`,
+        returnDate: `${yyyy2}-${mm2}-${dd2}`,
+        purpose: form.purpose,
+        estimatedBudget: budget,
+        isUrgent: form.urgent || isLateSubmission,
+        urgencyReason: (form.urgent || isLateSubmission) ? (form.urgentReason || null) : null,
+      });
+      await submitTrip(created.id);
+      onSuccess();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Không thể tạo yêu cầu.");
+    }
   }
 
   const STEP_LABELS = ["01  Thông tin chuyến đi", "02  Lịch trình (AI gợi ý)", "03  Xem lại & Gửi duyệt"];
@@ -1071,19 +1317,45 @@ function EmpSuccess({ user, onLogout, onBack }: { user: User; onLogout: () => vo
 
 function EmpItinerary({ user, onLogout, trip, onBack }: { user: User; onLogout: () => void; trip: Trip; onBack: () => void }) {
   const readOnly = trip.status === "CLOSED";
+  const [items, setItems] = useState<BackendItineraryItem[]>([]);
+  const [itinLoading, setItinLoading] = useState(true);
+  const [itinError, setItinError] = useState("");
+
+  const reloadItin = async () => {
+    try {
+      const r = await getItinerary(trip.id);
+      setItems(r.items);
+    } catch {
+      setItinError("Không thể tải lịch trình.");
+    } finally {
+      setItinLoading(false);
+    }
+  };
+
+  useEffect(() => { void reloadItin(); }, [trip.id]);
+
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Nav user={user} onLogout={onLogout} />
-      <PageHeader label={trip.id} title={`${trip.from} — ${trip.to}`} subtitle={`${trip.departDate} – ${trip.returnDate} · Lịch trình AI gợi ý`} action={<ExportBtn />} />
+      <PageHeader label={trip.id} title={`${trip.from} — ${trip.to}`} subtitle={`${trip.departDate} – ${trip.returnDate} · Lịch trình`} action={<ExportBtn />} />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7">
         <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Về Dashboard</button></div>
         <Card className="p-6 sm:p-8 max-w-2xl">
-          <div className="flex items-center justify-between mb-5">
-            <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase">Lịch trình chuyến đi</p>
-            <span className="text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-full">AI Generated</span>
-          </div>
+          <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-5">Lịch trình chuyến đi</p>
           {readOnly && <p className="text-xs text-gray-400 mb-4 px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">Hồ sơ đã đóng — dữ liệu lịch trình ở chế độ chỉ đọc.</p>}
-          <ItineraryList initial={AI_ITINERARY} departDate={trip.departDate} readOnly={readOnly} />
+          {itinLoading && <p className="text-sm text-gray-400 py-8 text-center">Đang tải lịch trình...</p>}
+          {itinError && <p className="text-sm text-red-500 py-4 text-center">{itinError}</p>}
+          {!itinLoading && !itinError && (
+            <ItineraryListServer
+              items={items}
+              tripId={trip.id}
+              departDate={trip.departDate}
+              readOnly={readOnly}
+              onAdd={async (input) => { await addItineraryItem(trip.id, input); await reloadItin(); }}
+              onUpdate={async (itemId, input) => { await updateItineraryItem(trip.id, itemId, input); await reloadItin(); }}
+              onDelete={async (itemId) => { await deleteItineraryItem(trip.id, itemId); await reloadItin(); }}
+            />
+          )}
         </Card>
       </main>
     </div>
@@ -1145,39 +1417,75 @@ function EmpStatus({ user, onLogout, trip, onBack }: { user: User; onLogout: () 
 }
 
 function EmpExpense({ user, onLogout, trip, onBack, onSave }: {
-  user: User; onLogout: () => void; trip: Trip; onBack: () => void; onSave: (exp: ExpenseItem[]) => void;
+  user: User; onLogout: () => void; trip: Trip; onBack: () => void; onSave: () => Promise<void>;
 }) {
   const readOnly = trip.status === "CLOSED" || trip.status === "EXPENSE_SUBMITTED" || trip.status === "PENDING_MANAGER_ADDITIONAL_APPROVAL";
-  const [items, setItems] = useState<ExpenseItem[]>(trip.actualExpenses ?? DEFAULT_EXPENSES());
-  const [note, setNote] = useState("");
+  const [expense, setExpense] = useState<BackendExpense | null>(null);
+  const [expLoading, setExpLoading] = useState(true);
   const [saveErr, setSaveErr] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const totalBudgeted = items.reduce((s, i) => s + i.budgeted, 0);
-  const totalActual   = items.reduce((s, i) => s + i.actual,   0);
-  const diff          = totalActual - totalBudgeted;
-  const overPct       = totalBudgeted > 0 ? (diff / totalBudgeted) * 100 : 0;
+  // Reload expense from server
+  const reloadExpense = async () => {
+    try {
+      const data = await getExpense(trip.id);
+      setExpense(data);
+    } catch {
+      // No expense yet — that's fine for APPROVED/TRIP_IN_PROGRESS
+      setExpense(null);
+    } finally {
+      setExpLoading(false);
+    }
+  };
 
-  function updateItem(id: string, field: keyof ExpenseItem, value: string | number) {
-    if (readOnly) return;
+  useEffect(() => { void reloadExpense(); }, [trip.id]);
+
+  // Map backend items to UI ExpenseItem shape
+  const items: ExpenseItem[] = (expense?.items ?? []).map(i => ({
+    id: i.id,
+    date: new Date(i.expenseDate).toLocaleDateString("vi-VN"),
+    category: mapBackendCategory(i.category),
+    label: i.description,
+    description: i.description,
+    budgeted: 0,            // backend expense model has no per-item budget
+    actual: i.amount,
+    receipt: i.receiptUrl ?? "",
+  }));
+
+  const totalActual = expense?.totalActual ?? 0;
+  const totalBudgeted = expense?.estimatedBudgetSnapshot ?? trip.budget;
+  const diff = totalActual - totalBudgeted;
+  const overPct = totalBudgeted > 0 ? (diff / totalBudgeted) * 100 : 0;
+
+  async function handleSave() {
     setSaveErr("");
-    setItems(prev => prev.map(it => it.id === id ? { ...it, [field]: value } : it));
+    setSubmitting(true);
+    try {
+      // Ensure expense header exists
+      let exp = expense;
+      if (!exp) {
+        exp = await createExpense(trip.id);
+        setExpense(exp);
+      }
+      // Submit
+      await submitExpense(trip.id);
+      await onSave();
+    } catch (err) {
+      setSaveErr(err instanceof Error ? err.message : "Không thể nộp báo cáo.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  function handleSave() {
-    const negItem = items.find(it => (it.actual as number) < 0);
-    if (negItem) { setSaveErr(`Số tiền thực tế không được âm (${negItem.label}).`); return; }
-    if (items.every(it => it.actual === 0)) { setSaveErr("Vui lòng nhập ít nhất một khoản chi phí thực tế."); return; }
-    const deptD = parseDMY(trip.departDate);
-    const retD  = parseDMY(trip.returnDate);
-    const badDate = items.find(it => {
-      if (!it.date) return false;
-      const d = parseDMY(it.date);
-      if (!d) return true;
-      return (deptD && d < deptD) || (retD && d > retD);
-    });
-    if (badDate) { setSaveErr(`Ngày chi của "${badDate.label}" phải nằm trong khoảng ${trip.departDate} – ${trip.returnDate}.`); return; }
-    setSaveErr("");
-    onSave(items);
+  if (expLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 font-sans">
+        <Nav user={user} onLogout={onLogout} />
+        <main className="flex items-center justify-center py-20">
+          <p className="text-sm text-gray-400">Đang tải chi phí...</p>
+        </main>
+      </div>
+    );
   }
 
   return (
@@ -1194,54 +1502,36 @@ function EmpExpense({ user, onLogout, trip, onBack, onSave }: {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           <div className="lg:col-span-2 flex flex-col gap-4">
             <Card className="p-6">
-              <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-4">Từng khoản chi phí thực tế</p>
-              <div className="flex flex-col gap-5">
-                {items.map(item => {
-                  const overItem = item.actual > item.budgeted && item.budgeted > 0;
-                  return (
-                    <div key={item.id} className={`border rounded-xl p-4 transition-colors ${overItem ? "border-red-200 bg-red-50/40" : "border-gray-100 bg-gray-50/40"}`}>
-                      <div className="flex items-center justify-between mb-3">
-                        <select value={item.category} onChange={e => updateItem(item.id, "category", e.target.value)} disabled={readOnly} className="text-xs font-semibold text-gray-600 bg-transparent border border-gray-200 rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[#1b2f35] disabled:opacity-60 cursor-pointer">
-                          {EXPENSE_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-                        </select>
-                        {item.budgeted > 0 && <span className="text-xs text-gray-400">Dự toán: {item.budgeted.toLocaleString("vi-VN")}đ</span>}
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
-                        <div><FieldLabel>Ngày chi</FieldLabel><DatePicker value={item.date} onChange={v => updateItem(item.id, "date", v)} disabled={readOnly} /></div>
-                        <div><FieldLabel>Tên khoản chi</FieldLabel><TextInput value={item.label} onChange={e => updateItem(item.id, "label", e.target.value)} placeholder="Mô tả ngắn" disabled={readOnly} /></div>
-                        <div>
-                          <FieldLabel>Số tiền thực tế (đ)</FieldLabel>
-                          <input type="number" min={0} value={item.actual || ""} onChange={e => { const v = Math.max(0, Number(e.target.value)); updateItem(item.id, "actual", v); }} disabled={readOnly} className={`w-full border rounded-lg px-3.5 py-2.5 text-sm text-right font-semibold focus:outline-none focus:ring-2 focus:ring-[#1b2f35] transition disabled:opacity-60 ${overItem ? "border-red-300 bg-red-50 text-red-700" : "border-gray-200"}`} placeholder="0" />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <div><FieldLabel>Mô tả chứng từ</FieldLabel><TextInput value={item.description} onChange={e => updateItem(item.id, "description", e.target.value)} placeholder="Số hóa đơn, tên nhà cung cấp..." disabled={readOnly} /></div>
-                        <div><FieldLabel>Đính kèm biên nhận (mock)</FieldLabel><div className="flex items-center gap-2"><TextInput value={item.receipt || ""} onChange={e => updateItem(item.id, "receipt", e.target.value)} placeholder="filename.jpg" disabled={readOnly} /> {!readOnly && <button className="shrink-0 px-3 py-2.5 text-xs font-medium text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">Chọn</button>}</div></div>
-                      </div>
-                      {overItem && <p className="text-xs text-red-500 mt-2 font-semibold">Vượt dự toán {(item.actual - item.budgeted).toLocaleString("vi-VN")}đ ({(((item.actual - item.budgeted) / item.budgeted) * 100).toFixed(1)}%)</p>}
-                    </div>
-                  );
-                })}
-              </div>
-              {!readOnly && (
-                <div className="mt-4">
-                  <FieldLabel>Ghi chú bổ sung</FieldLabel>
-                  <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="Lý do phát sinh chi phí ngoài dự toán..." className="w-full border border-gray-200 rounded-lg px-3.5 py-2.5 text-sm text-[#1b2f35] placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#1b2f35] resize-none transition" />
-                </div>
+              <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-4">Từng khoản chi phí</p>
+              {items.length === 0 && !readOnly && (
+                <p className="text-sm text-gray-400 mb-4">Chưa có khoản chi nào. Hãy thêm chi phí bên dưới.</p>
               )}
+              <div className="flex flex-col gap-3">
+                {items.map(item => (
+                  <div key={item.id} className="border rounded-xl p-4 border-gray-100 bg-gray-50/40">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-semibold text-gray-500 uppercase">{item.category}</span>
+                      <span className="text-sm font-bold text-[#1b2f35]">{item.actual.toLocaleString("vi-VN")}đ</span>
+                    </div>
+                    <p className="text-sm text-gray-700">{item.label}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{item.date}</p>
+                  </div>
+                ))}
+              </div>
+              {!readOnly && <ExpenseItemForm tripId={trip.id} onAdded={reloadExpense} />}
             </Card>
           </div>
           <div className="flex flex-col gap-4">
             <Card className="p-5">
               <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-3">Tóm tắt</p>
               <div className="flex flex-col gap-2 text-sm">
-                <div className="flex justify-between"><span className="text-gray-400">Tổng dự toán</span><span className="font-medium">{totalBudgeted.toLocaleString("vi-VN")}đ</span></div>
-                <div className="flex justify-between"><span className="text-gray-400">Tổng thực tế</span><span className="font-bold text-[#1b2f35]">{totalActual.toLocaleString("vi-VN")}đ</span></div>
+                <div className="flex justify-between"><span className="text-gray-400">Dự toán</span><span className="font-medium">{totalBudgeted.toLocaleString("vi-VN")}đ</span></div>
+                <div className="flex justify-between"><span className="text-gray-400">Thực tế</span><span className="font-bold text-[#1b2f35]">{totalActual.toLocaleString("vi-VN")}đ</span></div>
                 <div className={`flex justify-between border-t border-gray-100 pt-2 font-bold ${diff > 0 ? "text-red-500" : "text-emerald-600"}`}>
                   <span>{diff > 0 ? "Vượt ngân sách" : "Tiết kiệm"}</span>
                   <span>{Math.abs(diff).toLocaleString("vi-VN")}đ</span>
                 </div>
-                {totalBudgeted > 0 && overPct !== 0 && (
+                {overPct !== 0 && (
                   <p className={`text-xs text-right ${overPct > 10 ? "text-red-500" : "text-gray-400"}`}>
                     {overPct > 0 ? "+" : ""}{overPct.toFixed(1)}%
                     {overPct > 10 && " — Finance yêu cầu giải trình"}
@@ -1252,8 +1542,8 @@ function EmpExpense({ user, onLogout, trip, onBack, onSave }: {
             {!readOnly && (
               <>
                 {saveErr && <p className="text-xs text-red-500 text-center font-medium px-2">{saveErr}</p>}
-                <button onClick={handleSave} className="w-full py-3 text-sm font-semibold text-white bg-[#1b2f35] hover:bg-[#243d45] rounded-xl shadow-sm transition-colors">
-                  Gửi báo cáo chi phí
+                <button onClick={handleSave} disabled={submitting || items.length === 0} className="w-full py-3 text-sm font-semibold text-white bg-[#1b2f35] hover:bg-[#243d45] rounded-xl shadow-sm transition-colors disabled:opacity-50">
+                  {submitting ? "Đang gửi..." : "Gửi báo cáo chi phí"}
                 </button>
               </>
             )}
@@ -1266,46 +1556,38 @@ function EmpExpense({ user, onLogout, trip, onBack, onSave }: {
 }
 
 function ManagerApp({ user, onLogout }: { user: User; onLogout: () => void }) {
-  const { trips, update } = useTrips();
-  const { push } = useNotifications(user.email);
+  const { trips, reload } = useTrips();
   const [selected, setSelected] = useState<Trip | null>(null);
 
   const queue      = trips.filter(t => t.status === "SUBMITTED");
   const addlQueue  = trips.filter(t => t.status === "PENDING_MANAGER_ADDITIONAL_APPROVAL");
-  const recent     = trips.filter(t => ["PENDING_ADMIN_APPROVAL","APPROVED","REJECTED"].includes(t.status) && t.managerApproved !== undefined);
+  const recent     = trips.filter(t => ["PENDING_ADMIN_APPROVAL","APPROVED","REJECTED"].includes(t.status));
 
-  function approve(note: string) {
+  async function approve(note: string) {
     if (!selected || !note.trim()) return;
-    const needsAdmin = needsAdminApproval(selected);
-    const nextStatus: TripStatus = needsAdmin ? "PENDING_ADMIN_APPROVAL" : "APPROVED";
-    update(prev => prev.map(t => t.id === selected.id ? { ...t, status: nextStatus, managerApproved: true, managerNote: note } : t));
-    if (needsAdmin) {
-      push({ toUser: "admin@smarttravel.vn", message: `${selected.id} — Manager đã duyệt cấp 1. Cần phê duyệt cấp 2 (ngân sách >20M hoặc vi phạm chính sách).`, type: "info", tripId: selected.id });
-    } else {
-      push({ toUser: selected.employeeId, message: `${selected.id} — Yêu cầu được Manager phê duyệt. Chuyến đi của bạn được chấp thuận.`, type: "success", tripId: selected.id });
-    }
+    try { await approveTrip(selected.id, note); await reload(); }
+    catch (err) { alert(err instanceof Error ? err.message : "Lỗi phê duyệt."); }
     setSelected(null);
   }
 
-  function reject(note: string) {
+  async function reject(note: string) {
     if (!selected || !note.trim()) return;
-    update(prev => prev.map(t => t.id === selected.id ? { ...t, status: "REJECTED", managerApproved: false, managerNote: note } : t));
-    push({ toUser: selected.employeeId, message: `${selected.id} — Yêu cầu bị từ chối: "${note}"`, type: "error", tripId: selected.id });
+    try { await rejectTrip(selected.id, note); await reload(); }
+    catch (err) { alert(err instanceof Error ? err.message : "Lỗi từ chối."); }
     setSelected(null);
   }
 
   const [addlSelected, setAddlSelected] = useState<Trip | null>(null);
 
-  function approveAdditional(note: string) {
+  async function approveAdditional(note: string) {
     if (!addlSelected || !note.trim()) return;
-    update(prev => prev.map(t => t.id === addlSelected.id ? { ...t, status: "EXPENSE_SUBMITTED", managerAdditionalApproval: true, managerNote: `[Duyệt bổ sung] ${note}` } : t));
-    push({ toUser: "ketoan@smarttravel.vn", message: `${addlSelected.id} — Manager đã phê duyệt bổ sung chênh lệch chi phí >10%. Finance có thể đóng hồ sơ.`, type: "success", tripId: addlSelected.id });
-    push({ toUser: addlSelected.employeeId, message: `${addlSelected.id} — Manager đã phê duyệt bổ sung. Finance sẽ tiến hành đóng hồ sơ.`, type: "info", tripId: addlSelected.id });
+    try { await reapproveExpense(addlSelected.id, note); await reload(); }
+    catch (err) { alert(err instanceof Error ? err.message : "Lỗi phê duyệt bổ sung."); }
     setAddlSelected(null);
   }
 
   if (selected) return <ApprovalDetail user={user} onLogout={onLogout} trip={selected} level={1} onApprove={approve} onReject={reject} onBack={() => setSelected(null)} />;
-  if (addlSelected) return <ApprovalDetail user={user} onLogout={onLogout} trip={addlSelected} level={1} onApprove={approveAdditional} onReject={(note) => { push({ toUser: addlSelected.employeeId, message: `${addlSelected.id} — Manager từ chối duyệt bổ sung chi phí: "${note}"`, type: "error", tripId: addlSelected.id }); setAddlSelected(null); }} onBack={() => setAddlSelected(null)} additionalApproval />;
+  if (addlSelected) return <ApprovalDetail user={user} onLogout={onLogout} trip={addlSelected} level={1} onApprove={approveAdditional} onReject={async (note) => { try { await rejectExpense(addlSelected.id, note); await reload(); } catch(err) { alert(err instanceof Error ? err.message : "Lỗi."); } setAddlSelected(null); }} onBack={() => setAddlSelected(null)} additionalApproval />;
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
@@ -1391,7 +1673,7 @@ function ApprovalDetail({ user, onLogout, trip, level, onApprove, onReject, onBa
             {level === 1 && (
               <Card className="p-5">
                 <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-2">Lịch trình (xem trước)</p>
-                <ItineraryList initial={AI_ITINERARY.slice(0, 1)} departDate={trip.departDate} readOnly />
+                <ApprovalItineraryPreview tripId={trip.id} />
               </Card>
             )}
           </div>
@@ -1424,24 +1706,23 @@ function ApprovalDetail({ user, onLogout, trip, level, onApprove, onReject, onBa
 }
 
 function AdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
-  const { trips, update } = useTrips();
-  const { push } = useNotifications(user.email);
+  const { trips, reload } = useTrips();
   const [selected, setSelected] = useState<Trip | null>(null);
   const [tab, setTab] = useState<"queue" | "all">("queue");
 
   const queue = trips.filter(t => t.status === "PENDING_ADMIN_APPROVAL");
   const all   = trips;
 
-  function approve(note: string) {
+  async function approve(note: string) {
     if (!selected || !note.trim()) return;
-    update(prev => prev.map(t => t.id === selected.id ? { ...t, status: "APPROVED", adminApproved: true, adminNote: note } : t));
-    push({ toUser: selected.employeeId, message: `${selected.id} — Travel Admin đã phê duyệt cấp 2. Chuyến đi được chấp thuận.`, type: "success", tripId: selected.id });
+    try { await approveTrip(selected.id, note); await reload(); }
+    catch (err) { alert(err instanceof Error ? err.message : "Lỗi phê duyệt."); }
     setSelected(null);
   }
-  function reject(note: string) {
+  async function reject(note: string) {
     if (!selected || !note.trim()) return;
-    update(prev => prev.map(t => t.id === selected.id ? { ...t, status: "REJECTED", adminApproved: false, adminNote: note } : t));
-    push({ toUser: selected.employeeId, message: `${selected.id} — Bị từ chối bởi Travel Admin: "${note}"`, type: "error", tripId: selected.id });
+    try { await rejectTrip(selected.id, note); await reload(); }
+    catch (err) { alert(err instanceof Error ? err.message : "Lỗi từ chối."); }
     setSelected(null);
   }
 
@@ -1470,8 +1751,7 @@ function AdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 }
 
 function FinanceApp({ user, onLogout }: { user: User; onLogout: () => void }) {
-  const { trips, update } = useTrips();
-  const { push } = useNotifications(user.email);
+  const { trips, reload } = useTrips();
   const [selected, setSelected] = useState<Trip | null>(null);
   const [view, setView] = useState<"dashboard" | "expense" | "close">("dashboard");
 
@@ -1480,23 +1760,27 @@ function FinanceApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const closed   = trips.filter(t => t.status === "CLOSED");
   const allFin   = trips.filter(t => ["APPROVED","TRIP_IN_PROGRESS","EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","CLOSED"].includes(t.status));
 
-  function closeTrip(finNote: string) {
+  async function handleCloseTrip(finNote: string) {
     if (!selected) return;
-    update(prev => prev.map(t => t.id === selected.id ? { ...t, status: "CLOSED", financeNote: finNote } : t));
-    push({ toUser: selected.employeeId, message: `${selected.id} — Finance đã duyệt chi phí và đóng hồ sơ chuyến đi.`, type: "success", tripId: selected.id });
+    try {
+      await approveExpense(selected.id, finNote || undefined);
+      await closeTrip(selected.id, finNote || undefined);
+      await reload();
+    } catch (err) { alert(err instanceof Error ? err.message : "Lỗi đóng hồ sơ."); }
     setSelected(null); setView("dashboard");
   }
 
-  function routeToManagerAdditional() {
+  async function routeToManagerAdditional() {
     if (!selected) return;
-    update(prev => prev.map(t => t.id === selected.id ? { ...t, status: "PENDING_MANAGER_ADDITIONAL_APPROVAL" } : t));
-    push({ toUser: "truongphong@smarttravel.vn", message: `${selected.id} — Chi phí thực tế vượt dự toán >10%. Finance yêu cầu Manager phê duyệt bổ sung.`, type: "warning", tripId: selected.id });
-    push({ toUser: selected.employeeId, message: `${selected.id} — Chi phí vượt >10%, đang chờ Manager phê duyệt bổ sung trước khi Finance đóng hồ sơ.`, type: "warning", tripId: selected.id });
+    try {
+      await rejectExpense(selected.id, "Chi phí vượt >10% — chuyển Manager phê duyệt bổ sung (BR-TR-05).");
+      await reload();
+    } catch (err) { alert(err instanceof Error ? err.message : "Lỗi chuyển Manager."); }
     setSelected(null); setView("dashboard");
   }
 
   if (view === "expense" && selected) return <FinExpense user={user} onLogout={onLogout} trip={selected} onClose={() => setView("close")} onRouteToManager={routeToManagerAdditional} onBack={() => { setSelected(null); setView("dashboard"); }} />;
-  if (view === "close"   && selected) return <FinClose   user={user} onLogout={onLogout} trip={selected} onConfirm={closeTrip} onBack={() => { setSelected(null); setView("dashboard"); }} />;
+  if (view === "close"   && selected) return <FinClose   user={user} onLogout={onLogout} trip={selected} onConfirm={handleCloseTrip} onBack={() => { setSelected(null); setView("dashboard"); }} />;
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
@@ -1547,13 +1831,35 @@ function FinanceApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 function FinExpense({ user, onLogout, trip, onClose, onRouteToManager, onBack }: {
   user: User; onLogout: () => void; trip: Trip; onClose: () => void; onRouteToManager: () => void; onBack: () => void;
 }) {
-  const items = trip.actualExpenses ?? DEFAULT_EXPENSES();
-  const totalActual   = items.reduce((s, i) => s + i.actual,   0);
-  const totalBudgeted = items.reduce((s, i) => s + i.budgeted, 0);
+  const [expense, setExpense] = useState<BackendExpense | null>(null);
+  const [expLoading, setExpLoading] = useState(true);
+
+  useEffect(() => {
+    getExpense(trip.id).then(setExpense).catch(() => setExpense(null)).finally(() => setExpLoading(false));
+  }, [trip.id]);
+
+  const totalActual   = expense?.totalActual ?? 0;
+  const totalBudgeted = expense?.estimatedBudgetSnapshot ?? trip.budget;
   const overPct = totalBudgeted > 0 ? ((totalActual - totalBudgeted) / totalBudgeted) * 100 : 0;
   const overTolerance = overPct > 10;
-  const alreadyApproved = !!trip.managerAdditionalApproval;
+  const alreadyApproved = expense?.managerReapproved ?? false;
   const needsExplanation = overTolerance && !alreadyApproved;
+
+  // Map to ExpenseItem[] for VarianceTable display
+  const items: ExpenseItem[] = (expense?.items ?? []).map(i => ({
+    id: i.id, date: new Date(i.expenseDate).toLocaleDateString("vi-VN"),
+    category: mapBackendCategory(i.category), label: i.description,
+    description: i.description, budgeted: 0, actual: i.amount,
+  }));
+
+  if (expLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 font-sans">
+        <Nav user={user} onLogout={onLogout} />
+        <main className="flex items-center justify-center py-20"><p className="text-sm text-gray-400">Đang tải...</p></main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
@@ -1616,13 +1922,28 @@ function FinClose({ user, onLogout, trip, onConfirm, onBack }: {
   user: User; onLogout: () => void; trip: Trip; onConfirm: (note: string) => void; onBack: () => void;
 }) {
   const [note, setNote] = useState("");
-  const items = trip.actualExpenses ?? DEFAULT_EXPENSES();
-  const totalActual   = items.reduce((s, i) => s + i.actual,   0);
-  const totalBudgeted = items.reduce((s, i) => s + i.budgeted, 0);
+  const [expense, setExpense] = useState<BackendExpense | null>(null);
+  const [expLoading, setExpLoading] = useState(true);
+
+  useEffect(() => {
+    getExpense(trip.id).then(setExpense).catch(() => setExpense(null)).finally(() => setExpLoading(false));
+  }, [trip.id]);
+
+  const totalActual   = expense?.totalActual ?? 0;
+  const totalBudgeted = expense?.estimatedBudgetSnapshot ?? trip.budget;
   const overPct = totalBudgeted > 0 ? ((totalActual - totalBudgeted) / totalBudgeted) * 100 : 0;
   const overTolerance = overPct > 10;
-  const needsExplanation = overTolerance && !trip.managerAdditionalApproval;
-  const hasExpenses = items.some(i => i.actual > 0);
+  const needsExplanation = overTolerance && !(expense?.managerReapproved ?? false);
+  const hasExpenses = totalActual > 0;
+
+  if (expLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 font-sans">
+        <Nav user={user} onLogout={onLogout} />
+        <main className="flex items-center justify-center py-20"><p className="text-sm text-gray-400">Đang tải...</p></main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
@@ -1689,7 +2010,7 @@ function RegisterScreen({ onBack, onSuccess }: { onBack: () => void; onSuccess: 
 
   function validateStep2() {
     const e: Record<string, string> = {};
-    if (form.password.length < 6) e.password = "Mật khẩu phải có ít nhất 6 ký tự.";
+    if (form.password.length < 8) e.password = "Mật khẩu phải có ít nhất 8 ký tự.";
     if (form.password !== form.confirm) e.confirm = "Xác nhận mật khẩu không khớp.";
     setErrors(e); return Object.keys(e).length === 0;
   }
@@ -1810,7 +2131,7 @@ function RegisterScreen({ onBack, onSuccess }: { onBack: () => void; onSuccess: 
                 )}
                 <div>
                   <FieldLabel>Mật khẩu <span className="text-red-400">*</span></FieldLabel>
-                  <div className="relative"><TextInput type={showPass ? "text" : "password"} value={form.password} onChange={set("password")} placeholder="Tối thiểu 6 ký tự" /><button type="button" onClick={() => setShowPass(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><EyeIcon open={showPass} /></button></div>
+                  <div className="relative"><TextInput type={showPass ? "text" : "password"} value={form.password} onChange={set("password")} placeholder="Tối thiểu 8 ký tự" /><button type="button" onClick={() => setShowPass(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><EyeIcon open={showPass} /></button></div>
                   {form.password.length > 0 && <div className="mt-1.5 flex gap-1">{[1,2,3,4].map(i => <div key={i} className={`h-1 flex-1 rounded-full ${form.password.length >= i*3 ? i<=1?"bg-red-400":i<=2?"bg-amber-400":i<=3?"bg-emerald-400":"bg-emerald-600":"bg-gray-200"}`} />)}</div>}
                   {errors.password && <p className="text-xs text-red-500 mt-1">{errors.password}</p>}
                 </div>
@@ -1849,18 +2170,25 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
   const [fpError, setFpError] = useState("");
   const [fpDone, setFpDone]   = useState(false);
 
-  function handleLogin(e: React.FormEvent) {
-    e.preventDefault(); setError("");
-    const user = USERS.find(u => u.email === email && u.password === password);
-    if (!user) { setError("Email hoặc mật khẩu không đúng."); return; }
-    setLoading(true); setTimeout(() => { setLoading(false); onLogin(user); }, 900);
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      const backendUser = await authApi.login(email, password);
+      onLogin(toFrontendUser(backendUser));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Không thể kết nối đến máy chủ.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   function handleForgot(e: React.FormEvent) {
     e.preventDefault(); setFpError("");
     const user = USERS.find(u => u.email === fpEmail);
     if (!user) { setFpError("Email này không tồn tại."); return; }
-    if (fpNew.length < 6) { setFpError("Mật khẩu mới phải có ít nhất 6 ký tự."); return; }
+    if (fpNew.length < 8) { setFpError("Mật khẩu mới phải có ít nhất 8 ký tự."); return; }
     if (fpNew !== fpConfirm) { setFpError("Xác nhận mật khẩu không khớp."); return; }
     user.password = fpNew; setFpDone(true);
   }
@@ -1903,7 +2231,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
                 </div>
                 <div>
                   <FieldLabel>Mật khẩu mới</FieldLabel>
-                  <div className="relative"><TextInput type={fpShowNew ? "text" : "password"} value={fpNew} onChange={e => setFpNew(e.target.value)} placeholder="Tối thiểu 6 ký tự" /><button type="button" onClick={() => setFpShowNew(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><EyeIcon open={fpShowNew} /></button></div>
+                  <div className="relative"><TextInput type={fpShowNew ? "text" : "password"} value={fpNew} onChange={e => setFpNew(e.target.value)} placeholder="Tối thiểu 8 ký tự" /><button type="button" onClick={() => setFpShowNew(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><EyeIcon open={fpShowNew} /></button></div>
                 </div>
                 <div>
                   <FieldLabel>Xác nhận mật khẩu mới</FieldLabel>
@@ -1949,10 +2277,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
             <button type="submit" disabled={loading} className="w-full py-2.5 text-sm font-semibold text-white bg-[#1b2f35] hover:bg-[#243d45] rounded-lg transition-colors disabled:opacity-60">
               {loading ? "Đang đăng nhập..." : "Đăng nhập"}
             </button>
-            <div className="flex justify-between items-center text-xs text-gray-400">
-              <button type="button" onClick={() => setMode("forgot")} className="hover:text-gray-600">Quên mật khẩu?</button>
-              <button type="button" onClick={() => setMode("register")} className="text-emerald-600 hover:underline">Tạo tài khoản mới</button>
-            </div>
+            <p className="text-xs text-center text-gray-400">Liên hệ quản trị viên để được cấp hoặc đặt lại tài khoản.</p>
           </form>
         </Card>
       </div>
@@ -1970,9 +2295,49 @@ function getRoleRoute(role: Role): string {
   }
 }
 
+function toFrontendUser(user: BackendUser): User {
+  const roleMap: Record<BackendUser['role'], Role> = {
+    EMPLOYEE: "employee",
+    MANAGER: "manager",
+    TRAVEL_ADMIN: "admin",
+    FINANCE: "finance",
+    ADMIN: "admin",
+  };
+  const titleMap: Record<BackendUser['role'], string> = {
+    EMPLOYEE: "Nhân viên",
+    MANAGER: "Quản lý",
+    TRAVEL_ADMIN: "Travel Admin",
+    FINANCE: "Finance",
+    ADMIN: "System Admin",
+  };
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: roleMap[user.role],
+    title: user.department ?? titleMap[user.role],
+  };
+}
+
 function App() {
   const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    void authApi.restoreSession()
+      .then((backendUser) => {
+        if (mounted) setUser(toFrontendUser(backendUser));
+      })
+      .catch(() => {
+        // Không có refresh cookie hợp lệ: hiển thị màn hình đăng nhập.
+      })
+      .finally(() => {
+        if (mounted) setIsRestoringSession(false);
+      });
+    return () => { mounted = false; };
+  }, []);
 
   const handleLogin = (nextUser: User) => {
     setUser(nextUser);
@@ -1980,9 +2345,14 @@ function App() {
   };
 
   const handleLogout = () => {
+    void authApi.logout();
     setUser(null);
     navigate("/");
   };
+
+  if (isRestoringSession) {
+    return <div className="min-h-screen flex items-center justify-center text-sm text-gray-500">Đang kiểm tra phiên đăng nhập...</div>;
+  }
 
   return (
     <Routes>

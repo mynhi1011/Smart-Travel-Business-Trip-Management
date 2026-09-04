@@ -35,7 +35,7 @@
 
 | Quy ước | Giá trị |
 |---|---|
-| **Base URL** | `http://localhost:3001/api/v1` |
+| **Base URL** | `http://localhost:5000/api/v1` |
 | **API Version** | `v1` — nằm trong URL path |
 | **Path style** | `kebab-case` |
 | **JSON field style** | `camelCase` — ví dụ: `estimatedBudget`, `departureDate` |

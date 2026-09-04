@@ -123,7 +123,7 @@ graph TB
         SSE_CLIENT["EventSource\n(SSE Listener — Notifications)"]
     end
 
-    subgraph SERVER["BACKEND LAYER — Node.js + Express (Port 3001)"]
+    subgraph SERVER["BACKEND LAYER — Node.js + Express (Port 5000)"]
         direction TB
 
         subgraph MIDDLEWARE["MIDDLEWARE CHAIN"]

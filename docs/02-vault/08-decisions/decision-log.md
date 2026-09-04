@@ -11,6 +11,7 @@ Ghi lại mọi quyết định quan trọng của dự án — không được 
 | D-05 | 24-25/08/2026 | Không tích hợp thanh toán thật, đặt vé/khách sạn thật qua API bên thứ ba | Nằm ngoài phạm vi MVP; tập trung nguồn lực vào workflow phê duyệt + AI feature thay vì tích hợp bên thứ ba phức tạp, tốn thời gian | Cả nhóm |
 | D-06 | 26/08/2026 | Thống nhất trần khách sạn Staff/Specialist là 1.000.000 VNĐ/đêm (BR-TR-01) thay vì 1.200.000 VNĐ trong phỏng vấn P3 | Số liệu 1.200.000 VNĐ trong `user-research.md` là chính sách công ty ngoài thực tế của P3. Nhóm chuẩn hoá lại trần 1.000.000 VNĐ cho hệ thống mẫu của nhóm nhằm dễ tính toán hạn mức phân tầng chẵn (Staff: 1M, Manager: 1.8M, Director: 3M) và khớp với seed data demo. | Mỹ Nhi (BA) & Cả nhóm |
 | D-07 | 26/08/2026 | Quy định thời hạn gửi yêu cầu công tác nội bộ là trước 3 ngày làm việc (BR-TR-03) | Trong phỏng vấn P3 đề cập quy tắc "7 ngày" là bao gồm cả thời gian book vé máy bay giá rẻ/phòng của công ty ngoài. Trong phạm vi hệ thống nội bộ của nhóm (chỉ xử lý Request → Approval), quy định 3 ngày làm việc là thời gian tối thiểu hợp lý (SLA) để Manager và Travel Admin xử lý phê duyệt trước ngày khởi hành. | Mỹ Nhi (BA) |
+| D-08 | 04/09/2026 | Full-local web chạy tại `http://localhost:5000`; Express phục vụ cả `/api/v1/*` và frontend SPA đã build | Một cổng giúp demo, vận hành local và xác thực cookie đơn giản hơn. Vite `5173` chỉ còn là tùy chọn khi phát triển UI độc lập. | Nhóm |
 
 ## Cách dùng file này
 

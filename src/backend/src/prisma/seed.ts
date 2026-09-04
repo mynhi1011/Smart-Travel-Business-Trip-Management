@@ -29,16 +29,23 @@ const prisma = new PrismaClient({
 
 const BCRYPT_ROUNDS = 12;
 const DEMO_PASSWORD = 'Password123!';
+const FE_DEMO_PASSWORD = '12345678'; // Password cho frontend demo accounts
 
 // IDs cố định để dễ reference trong dev/test
 const IDS = {
-  // Users
+  // Users — backend personas
   ADMIN:        'aaaaaaaa-0000-4000-a000-000000000001',
   MANAGER:      'bbbbbbbb-0000-4000-b000-000000000002',
   EMPLOYEE_1:   'cccccccc-0000-4000-c000-000000000003',
   EMPLOYEE_2:   'dddddddd-0000-4000-d000-000000000004',
   TRAVEL_ADMIN: 'eeeeeeee-0000-4000-e000-000000000005',
   FINANCE:      'ffffffff-0000-4000-f000-000000000006',
+
+  // Users — frontend demo accounts (email: *@smarttravel.vn, password: 123456)
+  FE_EMPLOYEE:     'fe000001-0000-4000-a000-000000000001',
+  FE_MANAGER:      'fe000002-0000-4000-a000-000000000002',
+  FE_TRAVEL_ADMIN: 'fe000003-0000-4000-a000-000000000003',
+  FE_FINANCE:      'fe000004-0000-4000-a000-000000000004',
 
   // Trips
   TRIP_DRAFT:     '11111111-0000-4000-a000-000000000001',
@@ -143,6 +150,68 @@ async function seedUsers(passwordHash: string): Promise<void> {
   });
 
   console.log('  ✓ 6 users created');
+}
+
+async function seedFrontendUsers(fePasswordHash: string): Promise<void> {
+  console.log('  → Seeding frontend demo users (email: *@smarttravel.vn, password: 123456)...');
+
+  await prisma.user.createMany({
+    data: [
+      // ── Nguyễn Văn Nam — Nhân viên (Employee) ─────────────────────────────
+      {
+        id:           IDS.FE_EMPLOYEE,
+        name:         'Nguyễn Văn Nam',
+        email:        'nhanvien@smarttravel.vn',
+        passwordHash: fePasswordHash,
+        role:         'EMPLOYEE',
+        jobGrade:     'STAFF',
+        department:   'Sales',
+        managerId:    IDS.FE_MANAGER,
+        isActive:     true,
+      },
+
+      // ── Trần Thị Lan — Quản lý (Manager) ──────────────────────────────────
+      {
+        id:           IDS.FE_MANAGER,
+        name:         'Trần Thị Lan',
+        email:        'truongphong@smarttravel.vn',
+        passwordHash: fePasswordHash,
+        role:         'MANAGER',
+        jobGrade:     'MANAGER_GRADE',
+        department:   'Sales',
+        managerId:    IDS.ADMIN, // báo cáo lên System Admin
+        isActive:     true,
+      },
+
+      // ── Lê Minh Tuấn — Travel Admin ───────────────────────────────────────
+      {
+        id:           IDS.FE_TRAVEL_ADMIN,
+        name:         'Lê Minh Tuấn',
+        email:        'admin@smarttravel.vn',
+        passwordHash: fePasswordHash,
+        role:         'TRAVEL_ADMIN',
+        jobGrade:     'MANAGER_GRADE',
+        department:   'Administration',
+        managerId:    IDS.ADMIN,
+        isActive:     true,
+      },
+
+      // ── Phạm Thu Hà — Finance ──────────────────────────────────────────────
+      {
+        id:           IDS.FE_FINANCE,
+        name:         'Phạm Thu Hà',
+        email:        'ketoan@smarttravel.vn',
+        passwordHash: fePasswordHash,
+        role:         'FINANCE',
+        jobGrade:     'MANAGER_GRADE',
+        department:   'Finance & Accounting',
+        managerId:    IDS.ADMIN,
+        isActive:     true,
+      },
+    ],
+  });
+
+  console.log('  ✓ 4 frontend demo users created');
 }
 
 async function seedTrips(): Promise<void> {
@@ -481,8 +550,14 @@ async function main(): Promise<void> {
   const passwordHash = await bcrypt.hash(DEMO_PASSWORD, BCRYPT_ROUNDS);
   console.log('  ✓ Password hash ready\n');
 
+  // Hash password frontend (123456)
+  console.log('  → Hashing frontend demo password...');
+  const fePasswordHash = await bcrypt.hash(FE_DEMO_PASSWORD, BCRYPT_ROUNDS);
+  console.log('  ✓ Frontend password hash ready\n');
+
   // Chạy theo thứ tự để tránh FK constraint violations
   await seedUsers(passwordHash);
+  await seedFrontendUsers(fePasswordHash);
   await seedTrips();
   await seedPolicyCheckResults();
   await seedApprovalRecords();
@@ -498,6 +573,11 @@ async function main(): Promise<void> {
   console.log('  Travel Admin: mai.le@smarttravel.dev       (Lê Thị Mai - TRAVEL_ADMIN)');
   console.log('  Finance:      trang.pham@smarttravel.dev   (Phạm Thu Trang - FINANCE)');
   console.log('  Admin:        admin@smarttravel.dev        (System Admin - ADMIN)\n');
+  console.log('Frontend demo accounts (password: 12345678):');
+  console.log('  Employee:     nhanvien@smarttravel.vn      (Nguyễn Văn Nam - STAFF)');
+  console.log('  Manager:      truongphong@smarttravel.vn   (Trần Thị Lan - MANAGER_GRADE)');
+  console.log('  Travel Admin: admin@smarttravel.vn         (Lê Minh Tuấn - TRAVEL_ADMIN)');
+  console.log('  Finance:      ketoan@smarttravel.vn        (Phạm Thu Hà - FINANCE)\n');
 }
 
 main()

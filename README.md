@@ -106,13 +106,32 @@ Smart Travel & Business Trip Management/
 │     └─ AI_USAGE_LOG.md              (nhật ký dùng AI — cập nhật liên tục)
 │
 ├─ src/
-│  ├─ frontend/                       (chưa có code — .gitkeep, sẽ triển khai ở Frontend Sprint)
-│  └─ backend/                        (chưa có code — .gitkeep, sẽ triển khai ở Backend Sprint)
-│
-└─ tests/                             (chưa có test — .gitkeep, sẽ triển khai ở Testing & QA Automation)
+│  ├─ frontend/                       (React + Vite + TypeScript + Tailwind CSS v4)
+│  │  ├─ src/
+│  │  │  ├─ App.tsx                   (toàn bộ UI — components, hooks, types)
+│  │  │  ├─ main.tsx
+│  │  │  └─ services/
+│  │  │     ├─ api.ts                 (API client — JWT, auto-refresh, error handling)
+│  │  │     ├─ trips.ts
+│  │  │     ├─ itinerary.ts
+│  │  │     └─ expenses.ts
+│  │  └─ dist/                        (build output — được backend serve tĩnh)
+│  └─ backend/                        (Node.js + Express + TypeScript + Prisma + SQLite)
+│     ├─ src/
+│     │  ├─ server.ts                 (entry point)
+│     │  ├─ app.ts                    (Express setup, routes, static, SPA fallback)
+│     │  ├─ routes/                   (trips, itinerary, expenses, auth, ai, notifications)
+│     │  ├─ controllers/
+│     │  ├─ services/
+│     │  ├─ middlewares/
+│     │  └─ prisma/
+│     │     ├─ schema.prisma
+│     │     ├─ seed.ts
+│     │     └─ dev.db                 (SQLite — local dev)
+│     └─ .env                         (không commit — xem .env.example)
 ```
 
-**Trạng thái theo tuần kế hoạch (Plan Master MIS3032_1):** Discovery/Vault (tuần 1–2), PRD/Prototype/UX (tuần 3), User Stories/Taiga/Figma/Technical Specs (tuần 4) và đặc tả AI feature (tuần 8) đã có nội dung đầy đủ. `06-testing/`, `07-release/` và `src/`, `tests/` mới là khung thư mục, nội dung thật sẽ được bổ sung ở các tuần Code Review, Testing & QA, Security/NFR và Release Engineering theo đúng lộ trình.
+**Trạng thái theo tuần kế hoạch (Plan Master MIS3032_1):** Discovery/Vault (tuần 1–2), PRD/Prototype/UX (tuần 3), User Stories/Taiga/Figma/Technical Specs (tuần 4) và đặc tả AI feature (tuần 8) đã có nội dung đầy đủ. Backend API và Frontend SPA đã triển khai và kết nối end-to-end. `06-testing/` và `07-release/` là khung thư mục, nội dung thật sẽ bổ sung ở các tuần Testing & QA và Release Engineering.
 
 ## Team
 
@@ -126,15 +145,130 @@ Xem chi tiết phân vai tại [`docs/team-roles.md`](docs/team-roles.md).
 | Engineering | Nguyễn Thị Ánh Tuyết |
 | QA/Release | Hà Gia Bảo Ngọc |
 
-## Cách chạy dự án
+## Cách chạy dự án (local — một cổng duy nhất)
 
-> Sẽ cập nhật chi tiết khi backend/frontend hoàn thành (xem [`docs/07-release/RUNBOOK.md`](docs/07-release/RUNBOOK.md) để biết hướng dẫn setup mới nhất).
+Kiến trúc: Express phục vụ cả API lẫn bản build React tại **`localhost:5000`**.
+Không cần Docker, không cần deploy, không cần Vite dev server riêng.
+
+### Yêu cầu
+
+- **Node.js ≥ 20** — tải tại [nodejs.org](https://nodejs.org/)
+- **npm ≥ 9** (đi kèm Node.js)
+- Git
+
+### Bước 1 — Clone repo
 
 ```bash
 git clone https://github.com/mynhi1011/Smart-Travel-Business-Trip-Management-.git
 cd Smart-Travel-Business-Trip-Management-
-# hướng dẫn cài đặt môi trường: xem docs/07-release/RUNBOOK.md
 ```
+
+### Bước 2 — Cài dependencies (nên mở 2 terminal và chạy)
+
+```bash
+# Backend
+cd src/backend
+npm install
+
+# Frontend
+cd src/frontend
+npm install
+```
+
+> **Windows PowerShell:** dùng `cd ..\frontend` (dấu `\` thay vì `/`)
+
+### Bước 3 — Tạo file `.env` cho backend
+
+File `.env` không được commit vào repo (chứa secrets). Cần tạo thủ công:
+
+```bash
+# macOS / Linux
+cd ../backend
+cp .env.example .env
+
+# Windows (PowerShell)
+cd ..\backend
+copy .env.example .env
+```
+
+Sau đó mở file `src/backend/.env` bằng bất kỳ text editor nào và **thay 2 dòng JWT** bằng chuỗi bất kỳ (tối thiểu 32 ký tự):
+
+```
+JWT_ACCESS_SECRET=bat-ky-chuoi-nao-dai-hon-32-ky-tu-vd-abcdef1234567890abcdef1234567890
+JWT_REFRESH_SECRET=mot-chuoi-khac-dai-hon-32-ky-tu-vd-1234567890abcdef1234567890abcdef
+```
+
+> Các biến khác (`PORT=5000`, `DATABASE_URL=file:./dev.db`, `NODE_ENV=development`) đã có sẵn giá trị mặc định phù hợp cho dev — không cần đổi.
+
+### Bước 4 — Khởi tạo database và seed dữ liệu mẫu
+
+```bash
+# Vẫn ở src/backend/
+npm run db:migrate   # tạo database SQLite + chạy migrations
+npm run db:seed      # tạo tài khoản demo
+```
+
+### Bước 5 — Build frontend
+
+```bash
+cd ../frontend
+npm run build
+```
+
+Lệnh này tạo thư mục `src/frontend/dist/` — backend sẽ tự serve thư mục này.
+
+### Bước 6 — Chạy server
+
+```bash
+cd ../backend
+npm run dev
+```
+
+Kết quả mong đợi:
+
+```
+{"level":"INFO","message":"Server started","port":5000,...}
+```
+
+Mở trình duyệt tại **[http://localhost:5000](http://localhost:5000)**
+
+---
+
+### Tài khoản demo (password: `12345678`)
+
+| Email | Vai trò |
+|---|---|
+| `nhanvien@smarttravel.vn` | Employee |
+| `truongphong@smarttravel.vn` | Manager |
+| `admin@smarttravel.vn` | Travel Admin |
+| `ketoan@smarttravel.vn` | Finance |
+
+---
+
+### Chạy lại lần sau
+
+Chỉ cần 1 lệnh (từ thư mục `src/backend/`):
+
+```bash
+npm run dev
+```
+
+> **Sau khi sửa code frontend**, build lại trước:
+> ```bash
+> cd src/frontend && npm run build
+> ```
+> Backend tự reload nhờ `tsx watch` — không cần restart.
+
+---
+
+### Reset dữ liệu về trạng thái ban đầu
+
+```bash
+# Từ src/backend/
+npm run db:reset
+```
+
+Lệnh này xóa sạch database và chạy lại seed.
 
 ## Trạng thái dự án
 
