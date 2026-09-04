@@ -2,6 +2,7 @@ import { apiRequest } from './api';
 
 export interface BackendTrip {
   id: string;
+  tripCode: string;           // TR-YYYY-NNNN — human-readable display ID
   employeeId: string;
   origin: string;
   destination: string;

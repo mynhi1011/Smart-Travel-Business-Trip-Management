@@ -238,6 +238,7 @@ async function seedTrips(): Promise<void> {
       // ── Trip 1: DRAFT — Nguyễn Văn Nam đang soạn ─────────────────────────
       {
         id:               IDS.TRIP_DRAFT,
+        tripCode:         'TR-2026-0001',
         employeeId:       IDS.EMPLOYEE_1,
         origin:           'Hà Nội',
         destination:      'Đà Nẵng',
@@ -260,6 +261,7 @@ async function seedTrips(): Promise<void> {
       // ── Trip 2: SUBMITTED — Nguyễn Văn Nam đã nộp (có policy violation) ───
       {
         id:               IDS.TRIP_SUBMITTED,
+        tripCode:         'TR-2026-0002',
         employeeId:       IDS.EMPLOYEE_1,
         origin:           'Hà Nội',
         destination:      'TP. Hồ Chí Minh',
@@ -283,6 +285,7 @@ async function seedTrips(): Promise<void> {
       // ── Trip 3: APPROVED — Trần Thị Bảo, trip đã được duyệt ──────────────
       {
         id:               IDS.TRIP_APPROVED,
+        tripCode:         'TR-2026-0003',
         employeeId:       IDS.EMPLOYEE_2,
         origin:           'Hà Nội',
         destination:      'Cần Thơ',

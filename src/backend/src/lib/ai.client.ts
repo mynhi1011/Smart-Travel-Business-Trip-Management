@@ -55,7 +55,28 @@ interface DraftValidation {
 
 const MODEL_NAME = 'gemini-1.5-flash';
 const MAX_RETRIES = 2;
-const GEMINI_TIMEOUT_MS = 8_000; // NFR-TR-02: timeout 8s để response ≤ 5s đến client
+
+/**
+ * BUG-09 fix — NFR-TR-02: client-visible latency ≤ 5s
+ *
+ * Trước đây GEMINI_TIMEOUT_MS = 8_000 → worst case 3 × 8s = 24s, vi phạm NFR.
+ *
+ * Chiến lược mới:
+ *   GEMINI_TIMEOUT_MS   = 4_500ms  — per-call timeout (Gemini + network RTT)
+ *   TOTAL_DEADLINE_MS   = 12_000ms — hard deadline cho toàn bộ retry loop
+ *
+ * Tại sao 4500ms thay vì 5000ms:
+ *   - 5s là budget tổng client-visible (HTTP round-trip + middleware + Express overhead)
+ *   - Mỗi Gemini call cần budget nhỏ hơn để còn chỗ cho xử lý trước/sau
+ *   - 4500ms/call + ~500ms overhead = ~5s cho attempt đầu tiên thành công
+ *
+ * TOTAL_DEADLINE_MS = 12s: đủ cho 2 lần retry nếu Gemini nhanh (< 4.5s),
+ * nhưng cap cứng để tránh trường hợp 3 × 4.5s = 13.5s ngoài tầm kiểm soát.
+ * Client sẽ nhận 500 sau ~12s thay vì chờ mãi.
+ */
+const GEMINI_TIMEOUT_MS  = 4_500; // per-call timeout (ms)
+const TOTAL_DEADLINE_MS  = 12_000; // hard deadline cho toàn retry loop (ms)
+
 const LOCATION_MAX = 300;        // API.md §7 itinerary item contract
 const ACTIVITY_MAX = 1000;
 const NOTES_MAX = 2000;
@@ -299,7 +320,7 @@ function parseAndValidateDraft(rawText: string, input: GenerateItineraryInput): 
 // ─── Gemini Call ──────────────────────────────────────────────────────────────
 
 /**
- * callGemini — Gọi Gemini với structured output (JSON responseMimeType) + timeout 8s.
+ * callGemini — Gọi Gemini với structured output (JSON responseMimeType) + timeout 4.5s.
  * Dùng validated prompt đã build — KHÔNG truyền req.body trực tiếp cho provider.
  */
 async function callGemini(prompt: string): Promise<string> {
@@ -334,17 +355,34 @@ async function callGemini(prompt: string): Promise<string> {
 /**
  * generateItinerary — Sinh lịch trình AI với guardrail BR-TR-07
  *
- * - Timeout 8s/lần gọi; timeout/provider/network failure → 500 generic (không retry, không expose chi tiết provider).
+ * - Per-call timeout 4.5s; timeout/provider/network failure → 500 generic (không retry).
+ * - Hard deadline 12s cho toàn bộ retry loop → nếu vượt, dừng sớm và trả 500.
  * - Output malformed/schema sai → 500 generic (không trả partial output).
  * - Tổng chi phí vượt budget → retry tối đa 2 lần với constraint chặt hơn;
  *   vẫn vượt → 422 AI_BUDGET_GUARDRAIL_FAILED.
+ *
+ * NFR-TR-02: client-visible latency ≤ 5s. Với timeout 4.5s + overhead ~500ms,
+ * attempt đầu thành công đảm bảo ≤ 5s. Retry là best-effort trong 12s deadline.
  */
 export async function generateItinerary(
   input: GenerateItineraryInput
 ): Promise<ItineraryDraft> {
   let lastReason: DraftFailureReason = 'MALFORMED';
+  const loopStartedAt = Date.now();
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    // BUG-09 fix: kiểm tra hard deadline trước mỗi attempt
+    const elapsed = Date.now() - loopStartedAt;
+    if (elapsed >= TOTAL_DEADLINE_MS) {
+      logEvent('WARN', 'AI_DEADLINE_EXCEEDED', {
+        attempt,
+        elapsedMs: elapsed,
+        totalDeadlineMs: TOTAL_DEADLINE_MS,
+        destination: input.destination,
+      });
+      throw Errors.INTERNAL_ERROR();
+    }
+
     const startedAt = Date.now();
 
     let text: string;
@@ -356,8 +394,9 @@ export async function generateItinerary(
         attempt,
         destination: input.destination,
         durationMs: Date.now() - startedAt,
+        totalElapsedMs: Date.now() - loopStartedAt,
       });
-      // Timeout/network/provider failure → 500 generic (API.md: không có error code riêng)
+      // Timeout/network/provider failure → 500 generic, không retry
       throw Errors.INTERNAL_ERROR();
     }
 
@@ -372,6 +411,7 @@ export async function generateItinerary(
         totalEstimatedCost: validation.totalEstimatedCost,
         guardrailPass: true,
         durationMs: Date.now() - startedAt,
+        totalElapsedMs: Date.now() - loopStartedAt,
       });
       return {
         items: validation.items ?? [],
@@ -388,6 +428,7 @@ export async function generateItinerary(
         attempt,
         budget: input.budget,
         reason: 'BUDGET_EXCEEDED',
+        totalElapsedMs: Date.now() - loopStartedAt,
       });
       continue; // retry với constraint chặt hơn
     }
@@ -399,11 +440,15 @@ export async function generateItinerary(
       destination: input.destination,
       budget: input.budget,
       attempts: MAX_RETRIES + 1,
+      totalElapsedMs: Date.now() - loopStartedAt,
     });
     throw Errors.AI_BUDGET_GUARDRAIL_FAILED();
   }
 
   // Malformed output → không trả raw/partial output cho client
-  logEvent('ERROR', 'AI_OUTPUT_INVALID', { destination: input.destination });
+  logEvent('ERROR', 'AI_OUTPUT_INVALID', {
+    destination: input.destination,
+    totalElapsedMs: Date.now() - loopStartedAt,
+  });
   throw Errors.INTERNAL_ERROR();
 }

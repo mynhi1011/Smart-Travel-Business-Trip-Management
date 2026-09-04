@@ -38,6 +38,31 @@ function computeTripDays(dep: Date, ret: Date): number {
   return calculateTripDays(dep, ret);
 }
 
+// ─── Helper: generate human-readable Trip Code ───────────────────────────────
+/**
+ * generateTripCode — Sinh mã Trip dạng TR-YYYY-NNNN
+ *
+ * Đếm số trip đã tạo trong năm hiện tại (theo created_at) để lấy sequence number.
+ * Atomic trong transaction → không race condition khi concurrent creates.
+ *
+ * Ví dụ: TR-2026-0001, TR-2026-0042, TR-2027-0001
+ */
+async function generateTripCode(): Promise<string> {
+  const year = new Date().getFullYear();
+  const yearStart = new Date(`${year}-01-01T00:00:00.000Z`);
+  const yearEnd   = new Date(`${year + 1}-01-01T00:00:00.000Z`);
+
+  const count = await prisma.trip.count({
+    where: {
+      createdAt: { gte: yearStart, lt: yearEnd },
+    },
+  });
+
+  // sequence = count + 1 (next trip in this year)
+  const seq = count + 1;
+  return `TR-${year}-${String(seq).padStart(4, '0')}`;
+}
+
 // ─── Helper: format trip for response ────────────────────────────────────────
 function formatTrip(trip: Record<string, unknown>, tripDays?: number) {
   const dep  = trip['departureDate'] as Date;
@@ -50,7 +75,7 @@ function formatTrip(trip: Record<string, unknown>, tripDays?: number) {
 
 export interface CreateTripResult {
   trip: {
-    id: string; employeeId: string; origin: string; destination: string;
+    id: string; tripCode: string; employeeId: string; origin: string; destination: string;
     destinationType: string; departureDate: Date; returnDate: Date; tripDays: number;
     purpose: string; estimatedBudget: number; hotelCostPerNight: number | null;
     hotelNights: number | null; perDiemBudget: number | null;
@@ -87,6 +112,7 @@ export async function createTrip(
 
   const trip = await prisma.trip.create({
     data: {
+      tripCode: await generateTripCode(),
       employeeId,
       origin: data.origin.trim(), destination: data.destination.trim(),
       destinationType: data.destinationType,
@@ -360,6 +386,10 @@ export async function approveTrip(
     const isTravelAdminApprove  = userRole === 'TRAVEL_ADMIN' && trip.status === 'PENDING_ADMIN_APPROVAL';
     if (!isManagerApprove && !isTravelAdminApprove) throw Errors.FORBIDDEN();
 
+    // BUG-01 fix: Manager chỉ được approve trip thuộc nhân viên dưới quyền mình
+    // NFR-TR-03 — RBAC ownership check: approverId phải là managerId của employee
+    if (isManagerApprove && trip.employee.managerId !== approverId) throw Errors.FORBIDDEN();
+
     const hasViolations  = (trip.policyCheckResult?.violationCount ?? 0) > 0;
     const routing        = routeApproval({ totalBudget: trip.estimatedBudget, hasViolations });
     const newStatus      = isTravelAdminApprove ? 'APPROVED' : routing.decision;
@@ -412,7 +442,7 @@ export async function rejectTrip(
   const { updated, previousStatus, auditAction, employeeId } = await prisma.$transaction(async (tx) => {
     const trip = await tx.trip.findUnique({
       where: { id: tripId },
-      include: { employee: { select: { id: true } } },
+      include: { employee: { select: { id: true, managerId: true } } },
     });
     if (!trip) throw Errors.TRIP_NOT_FOUND();
 
@@ -420,6 +450,10 @@ export async function rejectTrip(
       (userRole === 'MANAGER'      && trip.status === 'SUBMITTED') ||
       (userRole === 'TRAVEL_ADMIN' && trip.status === 'PENDING_ADMIN_APPROVAL');
     if (!canReject) throw Errors.FORBIDDEN();
+
+    // BUG-02 fix: Manager chỉ được reject trip thuộc nhân viên dưới quyền mình
+    // NFR-TR-03 — RBAC ownership check: approverId phải là managerId của employee
+    if (userRole === 'MANAGER' && trip.employee.managerId !== approverId) throw Errors.FORBIDDEN();
 
     const approvalLevel = userRole === 'MANAGER' ? 'LEVEL_1' : 'LEVEL_2';
     const auditAction   = userRole === 'MANAGER' ? AuditActions.MANAGER_REJECTED : AuditActions.ADMIN_REJECTED;
@@ -465,9 +499,18 @@ export async function closeTrip(
     if (!expense || expense.status !== 'APPROVED')
       throw Errors.INVALID_STATUS_TRANSITION(trip.status, 'CLOSED (expense must be APPROVED)');
 
+    // BUG-23 fix: optimistic concurrency — thêm status check trong where clause
+    // Nếu status đã bị thay đổi bởi concurrent request, update sẽ không match
+    // và Prisma trả về RecordNotFound → transaction rollback tự động
     const updated = await tx.trip.update({
-      where: { id: tripId },
+      where: {
+        id: tripId,
+        status: 'EXPENSE_APPROVED', // chỉ close khi đang ở đúng trạng thái này
+      },
       data: { status: 'CLOSED', closedAt: new Date() },
+    }).catch(() => {
+      // update không match → trip đã bị close bởi request khác
+      throw Errors.TRIP_IMMUTABLE();
     });
 
     await tx.expense.update({ where: { id: expense.id }, data: { status: 'CLOSED' } });

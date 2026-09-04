@@ -1,7 +1,19 @@
 ﻿import { useState, useRef, useEffect } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
-import { ApiError, authApi, type BackendUser } from "./services/api";
+import { ApiError, authApi, getAccessToken, type BackendUser } from "./services/api";
 import { listTrips, createTrip, submitTrip, approveTrip, rejectTrip, closeTrip, type BackendTrip } from "./services/trips";
+import { generateItinerary as generateAiItinerary, type AiItineraryItem } from "./services/ai";
+import {
+  listNotifications as apiListNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+  type BackendNotification,
+} from "./services/notifications";
+import {
+  getDashboard,
+  type ManagerDashboard,
+  type TravelAdminDashboard, type FinanceDashboard, type AdminDashboard,
+} from "./services/dashboard";
 import {
   getItinerary, addItineraryItem, updateItineraryItem, deleteItineraryItem,
   type BackendItineraryItem, type ItineraryItemInput, type ItineraryCategory, type ItineraryTimeSlot,
@@ -16,7 +28,9 @@ import {
 // TYPES
 // ══════════════════════════════════════════════════════════════════════════════
 
-type Role = "employee" | "manager" | "admin" | "finance";
+// BUG-17 fix: tách TRAVEL_ADMIN và ADMIN thành hai role riêng trong UI
+// Backend ADMIN có quyền xem toàn hệ thống — không được gộp chung với TRAVEL_ADMIN
+type Role = "employee" | "manager" | "admin" | "sysadmin" | "finance";
 type User = { id?: string; email: string; password?: string; name: string; role: Role; title: string };
 
 type TripStatus =
@@ -27,6 +41,7 @@ type TripStatus =
   | "TRIP_IN_PROGRESS"
   | "EXPENSE_SUBMITTED"
   | "PENDING_MANAGER_ADDITIONAL_APPROVAL"
+  | "EXPENSE_APPROVED"   // BUG-03: Finance approve expense xong nhưng trip chưa CLOSED
   | "CLOSED";
 
 type PolicyLevel = "error" | "warning";
@@ -38,7 +53,7 @@ type ExpenseItem = {
 };
 
 type Trip = {
-  id: string; from: string; to: string;
+  id: string; tripCode: string; from: string; to: string;
   departDate: string; returnDate: string;
   budget: number; status: TripStatus;
   employeeId: string; employeeName: string;
@@ -107,15 +122,121 @@ function parseDMY(s: string): Date | null {
 
 // _trips mock removed — trip data now loaded from backend API
 
-let _notifications: Notification[] = [
-  { id: "n1", toUser: "nhanvien@smarttravel.vn",    message: "TR-2026-9141 đã được Manager phê duyệt.",                     type: "success", read: false, createdAt: "28/06/2026", tripId: "TR-2026-9141" },
-  { id: "n2", toUser: "truongphong@smarttravel.vn", message: "TR-2026-0098 đang chờ phê duyệt cấp 1.",                     type: "info",    read: false, createdAt: "10/07/2026", tripId: "TR-2026-0098" },
-  { id: "n3", toUser: "admin@smarttravel.vn",       message: "TR-2026-0055 đang chờ phê duyệt cấp 2 (ngân sách >20M).",   type: "warning", read: false, createdAt: "01/07/2026", tripId: "TR-2026-0055" },
-];
+// _notifications mock removed — BUG-04/BUG-05: notifications now fetched from backend API + SSE
 
 function formatDate(value: string | null): string {
   return value ? new Intl.DateTimeFormat("vi-VN").format(new Date(value)) : "—";
 }
+
+/** Map BackendNotification.type → frontend Notification.type */
+function mapNotifType(type: string): Notification["type"] {
+  if (type.includes("REJECT") || type.includes("FAILED")) return "error";
+  if (type.includes("APPROVED") || type.includes("CLOSED")) return "success";
+  if (type.includes("PENDING") || type.includes("REAPPROVE")) return "warning";
+  return "info";
+}
+
+function toFrontendNotif(n: BackendNotification): Notification {
+  return {
+    id: n.id,
+    toUser: n.recipientId,
+    message: n.message,
+    type: mapNotifType(n.type),
+    read: n.isRead,
+    createdAt: new Intl.DateTimeFormat("vi-VN").format(new Date(n.createdAt)),
+    tripId: n.referenceType === "TRIP" ? (n.referenceId ?? undefined) : undefined,
+  };
+}
+
+/**
+ * useNotifications — BUG-04/BUG-05 fix
+ *
+ * - Fetch từ GET /notifications khi mount
+ * - markRead → PATCH /notifications/:id/read
+ * - markAllRead → PATCH /notifications/read-all
+ * - SSE stream /notifications/stream?token=<accessToken> cho real-time push
+ */
+const useNotifications = (userId: string) => {
+  const [notifs, setNotifs] = useState<Notification[]>([]);
+  const [loading, setLoading] = useState(true);
+  const eventSourceRef = useRef<EventSource | null>(null);
+
+  const fetchNotifs = async () => {
+    try {
+      const res = await apiListNotifications({ limit: 50 });
+      setNotifs(res.data.map(toFrontendNotif));
+    } catch {
+      // Không làm gián đoạn UI nếu load notification thất bại
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Mount: fetch lần đầu + mở SSE
+  useEffect(() => {
+    void fetchNotifs();
+
+    // BUG-05: Mở SSE stream để nhận real-time push
+    const token = getAccessToken();
+    if (token) {
+      const apiBase = (import.meta.env.VITE_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
+      const sseUrl = `${apiBase}/notifications/stream?token=${encodeURIComponent(token)}`;
+      const es = new EventSource(sseUrl);
+      eventSourceRef.current = es;
+
+      es.onmessage = (event: MessageEvent<string>) => {
+        try {
+          const payload = JSON.parse(event.data) as { type?: string };
+          // Bỏ qua ping event
+          if (payload.type === "CONNECTED" || payload.type === "ping") return;
+          // Có notification mới → refetch để đảm bảo đồng bộ với DB
+          void fetchNotifs();
+        } catch { /* ignore malformed */ }
+      };
+
+      es.onerror = () => {
+        // SSE lỗi/disconnect — đóng để tránh reconnect loop không kiểm soát
+        es.close();
+        eventSourceRef.current = null;
+      };
+    }
+
+    return () => {
+      eventSourceRef.current?.close();
+      eventSourceRef.current = null;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const markRead = async (id: string) => {
+    // Optimistic update
+    setNotifs(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+    try {
+      await markNotificationRead(id);
+    } catch {
+      // Revert nếu API lỗi
+      void fetchNotifs();
+    }
+  };
+
+  const markAllRead = async () => {
+    // Optimistic update
+    setNotifs(prev => prev.map(n => ({ ...n, read: true })));
+    try {
+      await markAllNotificationsRead();
+    } catch {
+      void fetchNotifs();
+    }
+  };
+
+  return {
+    notifs,
+    loading,
+    markRead,
+    markAllRead,
+    unread: notifs.filter(n => !n.read).length,
+  };
+};
 
 function toFrontendTrip(trip: BackendTrip): Trip {
   const statusMap: Record<string, TripStatus> = {
@@ -127,14 +248,14 @@ function toFrontendTrip(trip: BackendTrip): Trip {
     ONGOING:                  "TRIP_IN_PROGRESS",
     EXPENSE_DRAFT:            "TRIP_IN_PROGRESS",
     EXPENSE_SUBMITTED:        "EXPENSE_SUBMITTED",
-    EXPENSE_APPROVED:         "CLOSED",        // Finance đã approve → sắp close
+    EXPENSE_APPROVED:         "EXPENSE_APPROVED",  // BUG-03: trạng thái riêng, chưa phải CLOSED
     EXPENSE_REJECTED:         "EXPENSE_SUBMITTED", // bị reject → employee sửa lại
     MANAGER_REAPPROVE:        "PENDING_MANAGER_ADDITIONAL_APPROVAL",
     CLOSED:                   "CLOSED",
     REJECTED:                 "REJECTED",
   };
   return {
-    id: trip.id, from: trip.origin, to: trip.destination,
+    id: trip.id, tripCode: trip.tripCode, from: trip.origin, to: trip.destination,
     departDate: formatDate(trip.departureDate), returnDate: formatDate(trip.returnDate),
     budget: trip.estimatedBudget, status: statusMap[trip.status] ?? "DRAFT",
     employeeId: trip.employeeId, employeeName: trip.employee?.name ?? "—",
@@ -159,18 +280,22 @@ const useTrips = () => {
   return { trips, loading, reload };
 };
 
-const useNotifications = (userEmail: string) => {
-  const [notifs, setNotifs] = useState<Notification[]>(_notifications.filter(n => n.toUser === userEmail));
-  const refresh = () => setNotifs([..._notifications.filter(n => n.toUser === userEmail)]);
-  const push = (n: Omit<Notification, "id" | "createdAt" | "read">) => {
-    const notif: Notification = { ...n, id: `n${Date.now()}`, createdAt: new Date().toLocaleDateString("vi-VN"), read: false };
-    _notifications.push(notif);
-    refresh();
+/**
+ * useDashboard — BUG-10/BUG-11: Fetch dashboard data từ GET /dashboard
+ * Backend trả data đã tổng hợp theo role, không cần tự tính từ listTrips().
+ */
+function useDashboard<T>() {
+  const [data, setData] = useState<T | null>(null);
+  const [loading, setLoading] = useState(true);
+  const reload = async () => {
+    setLoading(true);
+    try { setData((await getDashboard()) as T); }
+    catch { /* fallback: giữ null, UI tự xử lý */ }
+    finally { setLoading(false); }
   };
-  const markRead    = (id: string) => { const n = _notifications.find(x => x.id === id); if (n) { n.read = true; refresh(); } };
-  const markAllRead = () => { _notifications.filter(n => n.toUser === userEmail).forEach(n => { n.read = true; }); refresh(); };
-  return { notifs, push, markRead, markAllRead, unread: notifs.filter(n => !n.read).length };
-};
+  useEffect(() => { void reload(); }, []);
+  return { data, loading, reload };
+}
 
 function getAccomLimit(title: string): { limit: number; label: string } {
   const t = title.toLowerCase();
@@ -179,6 +304,24 @@ function getAccomLimit(title: string): { limit: number; label: string } {
   if (t.includes("manager") || t.includes("lead") || t.includes("head"))
     return { limit: 1_800_000, label: "Manager/Lead" };
   return { limit: 1_000_000, label: "Staff/Specialist" };
+}
+
+/**
+ * BUG-14 fix: đếm ngày làm việc (bỏ Thứ 7, Chủ nhật) — đồng bộ với backend countWorkingDays()
+ * Backend: policy.service.ts countWorkingDays(from, to)
+ */
+function countWorkingDays(from: Date, to: Date): number {
+  let count = 0;
+  const cur = new Date(from);
+  cur.setHours(0, 0, 0, 0);
+  const end = new Date(to);
+  end.setHours(0, 0, 0, 0);
+  while (cur < end) {
+    const dow = cur.getDay();
+    if (dow !== 0 && dow !== 6) count++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return count;
 }
 
 function checkPolicy(budget: number, departDate: string, to: string, days: number, hotelPerNight = 0, employeeTitle = ""): PolicyViolation[] {
@@ -199,17 +342,21 @@ function checkPolicy(budget: number, departDate: string, to: string, days: numbe
 
   if (days > 0 && to) {
     const maxPerDiem = days * perDiemRate(to);
-    v.push({ level: "warning", code: "PER_DIEM_NOTE", message: `Hạn mức phụ cấp công tác: ${maxPerDiem.toLocaleString("vi-VN")}đ (${days} ngày × ${perDiemRate(to).toLocaleString("vi-VN")}đ)` });
+    // BUG-13 fix: BR-TR-02 "không cho phép vượt" → BLOCKER khi có perDiem input vượt hạn mức
+    // Ở đây chỉ hiển thị info note vì frontend không biết perDiemBudget riêng của user
+    // Policy check thực sự (BLOCKER) chạy ở server khi submit
+    v.push({ level: "warning", code: "PER_DIEM_NOTE", message: `Hạn mức phụ cấp công tác tối đa: ${maxPerDiem.toLocaleString("vi-VN")}đ (${days} ngày × ${perDiemRate(to).toLocaleString("vi-VN")}đ/ngày) — BR-TR-02` });
   }
 
   if (departDate) {
     const dept = parseDMY(departDate);
     if (dept) {
-      const daysLeft = Math.floor((dept.getTime() - Date.now()) / 86_400_000);
-      if (daysLeft >= 0 && daysLeft < 3) {
-        v.push({ level: "error", code: "LATE_SUBMISSION", message: `Nộp muộn — chuyến đi còn ${daysLeft} ngày (quy định tối thiểu 3 ngày). Đánh dấu là Chuyến đi khẩn cấp và nhập lý do.` });
-      } else if (daysLeft >= 3 && daysLeft < 5) {
-        v.push({ level: "warning", code: "SHORT_NOTICE", message: `Thời gian nộp khá sát (${daysLeft} ngày) — khuyến nghị nộp trước 5 ngày` });
+      // BUG-14 fix: dùng ngày làm việc thay vì ngày lịch để đồng bộ với backend
+      const workingDaysLeft = countWorkingDays(new Date(), dept);
+      if (workingDaysLeft >= 0 && workingDaysLeft < 3) {
+        v.push({ level: "error", code: "LATE_SUBMISSION", message: `Nộp muộn — còn ${workingDaysLeft} ngày làm việc trước khởi hành (tối thiểu 3 ngày làm việc). Đánh dấu là Chuyến đi khẩn cấp và nhập lý do.` });
+      } else if (workingDaysLeft >= 3 && workingDaysLeft < 5) {
+        v.push({ level: "warning", code: "SHORT_NOTICE", message: `Thời gian nộp khá sát (${workingDaysLeft} ngày làm việc) — khuyến nghị nộp trước 5 ngày làm việc` });
       }
     }
   }
@@ -217,8 +364,25 @@ function checkPolicy(budget: number, departDate: string, to: string, days: numbe
   return v;
 }
 
+/**
+ * BUG-15 fix: đồng bộ với backend routeApproval() trong approval.service.ts
+ * Backend: violations.length > 0 → PENDING_ADMIN_APPROVAL (không lọc gì cả)
+ * Frontend cũ: lọc bỏ LATE_SUBMISSION — không match backend
+ *
+ * Quyết định: giữ lọc LATE_SUBMISSION vì:
+ * - LATE_SUBMISSION / URGENT_TRIP_NOTICE → severity WARNING (không phải BLOCKER)
+ * - Backend policyCheckResult.violations chứa tất cả violations
+ * - Frontend map: severity BLOCKER → "error", WARNING → "warning"
+ * - Nếu chỉ có LATE_SUBMISSION (warning), backend vẫn route → PENDING_ADMIN_APPROVAL
+ *   vì requiresLevel2 = violations.length > 0
+ * → Sửa để dùng policyViolations từ backend (đã được server tính), ưu tiên budget check
+ */
 function needsAdminApproval(trip: Trip): boolean {
-  return trip.budget > 20_000_000 || !!(trip.policyViolations?.some(v => v.level === "error" && v.code !== "LATE_SUBMISSION"));
+  // Budget > 20M luôn cần Admin (BR-TR-04)
+  if (trip.budget > 20_000_000) return true;
+  // Có bất kỳ violation nào (từ server) → cần Admin, đúng với backend routeApproval()
+  if (trip.policyViolations && trip.policyViolations.length > 0) return true;
+  return false;
 }
 
 function PolicyBanner({ violations }: { violations: PolicyViolation[] }) {
@@ -241,10 +405,11 @@ const ROLE_COLORS: Record<Role, { logo: string; bg: string; text: string; border
   employee: { logo: "bg-emerald-500", bg: "bg-emerald-50",  text: "text-emerald-700", border: "border-emerald-200" },
   manager:  { logo: "bg-teal-500",    bg: "bg-teal-50",     text: "text-teal-700",    border: "border-teal-200"    },
   admin:    { logo: "bg-violet-500",  bg: "bg-violet-50",   text: "text-violet-700",  border: "border-violet-200"  },
+  sysadmin: { logo: "bg-rose-500",    bg: "bg-rose-50",     text: "text-rose-700",    border: "border-rose-200"    },
   finance:  { logo: "bg-amber-500",   bg: "bg-amber-50",    text: "text-amber-700",   border: "border-amber-200"   },
 };
 
-const ROLE_LABEL: Record<Role, string> = { employee: "Nhân viên", manager: "Quản lý", admin: "Travel Admin", finance: "Finance" };
+const ROLE_LABEL: Record<Role, string> = { employee: "Nhân viên", manager: "Quản lý", admin: "Travel Admin", sysadmin: "System Admin", finance: "Finance" };
 
 const STATUS_LABEL: Record<TripStatus, string> = {
   DRAFT:                               "Bản nháp",
@@ -256,6 +421,7 @@ const STATUS_LABEL: Record<TripStatus, string> = {
   REJECTED:                            "Từ chối",
   EXPENSE_SUBMITTED:                   "Đang quyết toán",
   PENDING_MANAGER_ADDITIONAL_APPROVAL: "Chờ Manager bổ sung",
+  EXPENSE_APPROVED:                    "Finance đã duyệt — chờ đóng hồ sơ",
   CLOSED:                              "Đã đóng hồ sơ",
 };
 
@@ -269,26 +435,46 @@ const STATUS_STYLE: Record<TripStatus, string> = {
   REJECTED:                            "bg-red-100 text-red-600 border border-red-200",
   EXPENSE_SUBMITTED:                   "bg-purple-100 text-purple-700 border border-purple-200",
   PENDING_MANAGER_ADDITIONAL_APPROVAL: "bg-orange-100 text-orange-700 border border-orange-200",
+  EXPENSE_APPROVED:                    "bg-indigo-100 text-indigo-700 border border-indigo-200",
   CLOSED:                              "bg-gray-100 text-gray-500 border border-gray-200",
 };
 
-const AI_ITINERARY: ItineraryDay[] = [
-  { day: "Ngày 1 — Thứ Tư, 02/07/2026", items: [
-    { time: "06:30", title: "Bay từ Đà Nẵng đến TP.HCM", detail: "VJ130 · Cất cánh 06:30, hạ cánh 07:50 · Sân bay Tân Sơn Nhất" },
-    { time: "08:30", title: "Xe đưa đón sân bay", detail: "GrabCar từ sân bay đến Khách sạn Mường Thanh Luxury Q.1" },
-    { time: "09:30", title: "Check-in khách sạn", detail: "Mường Thanh Luxury Sài Gòn · 180 Lý Tự Trọng, Q.1" },
-    { time: "10:00", title: "Họp ABC Corp", detail: "Tầng 12, Bitexco · Chốt hợp đồng phân phối Q3" },
-    { time: "19:00", title: "Dinner đối tác", detail: "Nhà hàng Ngon · 160 Pasteur, Q.3" },
-  ]},
-  { day: "Ngày 2 — Thứ Năm, 03/07/2026", items: [
-    { time: "09:00", title: "Họp kỹ thuật với team", detail: "Văn phòng ABC Corp · 234 Cộng Hòa, Tân Bình" },
-    { time: "14:00", title: "Ký kết hợp đồng", detail: "Phòng họp A · Có mặt pháp lý hai bên" },
-  ]},
-  { day: "Ngày 3 — Thứ Sáu, 04/07/2026", items: [
-    { time: "07:00", title: "Ăn sáng và check-out", detail: "Check-out trước 11:00" },
-    { time: "13:45", title: "Bay về Đà Nẵng", detail: "VJ235 · Cất cánh 13:45, hạ cánh 15:10" },
-  ]},
-];
+// AI_ITINERARY static data removed — BUG-06: replaced with real API call
+
+/** Convert AiItineraryItem[] (backend shape) → ItineraryDay[] (local display shape) */
+function aiItemsToItineraryDays(items: AiItineraryItem[]): ItineraryDay[] {
+  const TIME_SLOT_LABEL: Record<string, string> = {
+    MORNING: "Sáng", AFTERNOON: "Chiều", EVENING: "Tối", ALL_DAY: "Cả ngày",
+  };
+  const CATEGORY_LABEL: Record<string, string> = {
+    MEETING: "Họp", ACCOMMODATION: "Lưu trú", TRANSPORT: "Di chuyển",
+    MEAL: "Ăn uống", OTHER: "Khác",
+  };
+
+  // Nhóm theo dayNumber
+  const grouped = new Map<number, AiItineraryItem[]>();
+  for (const item of items) {
+    if (!grouped.has(item.dayNumber)) grouped.set(item.dayNumber, []);
+    grouped.get(item.dayNumber)!.push(item);
+  }
+
+  return Array.from(grouped.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([dayNumber, dayItems]) => {
+      const dateLabel = dayItems[0]?.itemDate
+        ? new Intl.DateTimeFormat("vi-VN", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" })
+            .format(new Date(dayItems[0].itemDate + "T00:00:00"))
+        : "";
+      return {
+        day: `Ngày ${dayNumber}${dateLabel ? ` — ${dateLabel}` : ""}`,
+        items: dayItems.map((it) => ({
+          time: `${TIME_SLOT_LABEL[it.timeSlot] ?? it.timeSlot} · ${CATEGORY_LABEL[it.category] ?? it.category}`,
+          title: it.activity,
+          detail: `${it.location}${it.estimatedCost > 0 ? ` · ${it.estimatedCost.toLocaleString("vi-VN")}đ` : ""}${it.notes ? ` · ${it.notes}` : ""}`,
+        })),
+      };
+    });
+}
 
 function EyeIcon({ open }: { open: boolean }) {
   return open
@@ -296,8 +482,8 @@ function EyeIcon({ open }: { open: boolean }) {
     : <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>;
 }
 
-function NotifBell({ userEmail }: { userEmail: string }) {
-  const { notifs, unread, markRead, markAllRead } = useNotifications(userEmail);
+function NotifBell({ userId }: { userId: string }) {
+  const { notifs, unread, markRead, markAllRead } = useNotifications(userId);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -324,12 +510,12 @@ function NotifBell({ userEmail }: { userEmail: string }) {
         <div className="absolute right-0 top-9 w-80 bg-white rounded-xl border border-gray-200 shadow-xl z-50 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
             <p className="text-xs font-bold text-[#1b2f35] uppercase tracking-wider">Thông báo</p>
-            {unread > 0 && <button onClick={markAllRead} className="text-xs text-emerald-600 hover:underline">Đánh dấu tất cả đã đọc</button>}
+            {unread > 0 && <button onClick={() => { void markAllRead(); }} className="text-xs text-emerald-600 hover:underline">Đánh dấu tất cả đã đọc</button>}
           </div>
           <div className="max-h-72 overflow-y-auto">
             {notifs.length === 0 && <p className="text-xs text-gray-400 text-center py-6">Không có thông báo nào.</p>}
             {notifs.map(n => (
-              <div key={n.id} onClick={() => markRead(n.id)} className={`flex items-start gap-3 px-4 py-3 border-b border-gray-50 cursor-pointer hover:bg-gray-50 transition-colors ${n.read ? "opacity-60" : ""}`}>
+              <div key={n.id} onClick={() => { void markRead(n.id); }} className={`flex items-start gap-3 px-4 py-3 border-b border-gray-50 cursor-pointer hover:bg-gray-50 transition-colors ${n.read ? "opacity-60" : ""}`}>
                 <div className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1.5 ${typeColor[n.type].replace("text-", "bg-")}`} />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs text-[#1b2f35] leading-relaxed">{n.message}</p>
@@ -361,7 +547,7 @@ function Nav({ user, onLogout }: { user: User; onLogout: () => void }) {
             <span className="text-gray-600">·</span>
             <span className="text-gray-300">{user.title}</span>
           </nav>
-          <NotifBell userEmail={user.email} />
+          <NotifBell userId={user.id ?? user.email} />
           <button onClick={onLogout} className="flex items-center gap-1.5 text-xs font-medium text-gray-400 hover:text-white border border-gray-600 hover:border-gray-400 rounded-md px-2.5 py-1.5 transition-colors shrink-0">
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h6a2 2 0 012 2v1" />
@@ -425,7 +611,7 @@ function TripCard({ trip, onClick, cta }: { trip: Trip; onClick?: () => void; ct
             {trip.urgent && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-red-100 text-red-600 border border-red-200">Khẩn cấp</span>}
           </div>
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-400">
-            <span className="font-medium text-gray-500">{trip.id}</span>
+            <span className="font-medium text-gray-500">{trip.tripCode}</span>
             <span>·</span><span>{trip.departDate} – {trip.returnDate}</span>
             <span>·</span><span>{trip.budget.toLocaleString("vi-VN")}đ</span>
             <span>·</span><span>{trip.employeeName}</span>
@@ -956,7 +1142,6 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   if (screen === "status"    && selected) return <EmpStatus    user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} />;
   if (screen === "expense"   && selected) return <EmpExpense   user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} onSave={async () => { await reload(); setScreen("dashboard"); }} />;
 
-  const STATUS_FILTERS: TripStatus[] = ["SUBMITTED", "APPROVED_MANAGER", "PENDING_ADMIN_APPROVAL", "APPROVED", "TRIP_IN_PROGRESS", "EXPENSE_SUBMITTED", "PENDING_MANAGER_ADDITIONAL_APPROVAL", "CLOSED", "REJECTED"];
   const filtered = myTrips.filter(t => filter === "all" || t.status === filter);
 
   return (
@@ -964,13 +1149,72 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
       <Nav user={user} onLogout={onLogout} />
       <PageHeader label="Employee Dashboard" title="Chuyến công tác của bạn" subtitle="Theo dõi, tạo mới hoặc khai báo chi phí thực tế." action={<button onClick={() => setScreen("create")} className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold px-4 py-2.5 rounded-lg shadow-sm transition-colors">+ Tạo Trip Request</button>} />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
-        <div className="flex gap-0 mb-5 border-b border-gray-200 overflow-x-auto">
-          {[{ key: "all", label: "Tất cả" }, ...STATUS_FILTERS.map(s => ({ key: s, label: STATUS_LABEL[s] }))].map(f => (
-            <button key={f.key} onClick={() => setFilter(f.key as typeof filter)} className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap -mb-px border-b-2 transition-colors ${filter === f.key ? "border-emerald-600 text-emerald-700" : "border-transparent text-gray-400 hover:text-gray-600"}`}>
-              {f.label}
-              {f.key !== "all" && <span className="ml-1.5 text-xs font-bold opacity-60">{myTrips.filter(t => t.status === f.key).length}</span>}
-            </button>
-          ))}
+        {/* ── Status filter tab bar ── */}
+        <div className="mb-5 bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          {/* Row */}
+          <div className="flex overflow-x-auto scrollbar-hide">
+            {(
+              [
+                { key: "all",                                  label: "Tất cả",             color: "gray"    },
+                { key: "SUBMITTED",                            label: "Chờ duyệt cấp 1",   color: "amber"   },
+                { key: "APPROVED_MANAGER",                     label: "Đã duyệt cấp 1",    color: "teal"    },
+                { key: "PENDING_ADMIN_APPROVAL",               label: "Chờ duyệt cấp 2",   color: "blue"    },
+                { key: "APPROVED",                             label: "Đã duyệt",           color: "emerald" },
+                { key: "TRIP_IN_PROGRESS",                     label: "Đang thực hiện",     color: "cyan"    },
+                { key: "EXPENSE_SUBMITTED",                    label: "Đang quyết toán",    color: "purple"  },
+                { key: "PENDING_MANAGER_ADDITIONAL_APPROVAL",  label: "Chờ Manager",        color: "orange"  },
+                { key: "EXPENSE_APPROVED",                     label: "Chờ đóng hồ sơ",    color: "indigo"  },
+                { key: "CLOSED",                               label: "Đã đóng",            color: "slate"   },
+                { key: "REJECTED",                             label: "Từ chối",            color: "red"     },
+              ] as { key: string; label: string; color: string }[]
+            ).map((f, idx, arr) => {
+              const count = f.key !== "all" ? myTrips.filter(t => t.status === f.key).length : myTrips.length;
+              const active = filter === f.key;
+
+              // colour palette per status
+              const palette: Record<string, { tab: string; tabActive: string; badge: string; badgeActive: string }> = {
+                gray:    { tab: "text-gray-500 hover:bg-gray-50 hover:text-gray-700",           tabActive: "bg-gray-100 text-gray-800",           badge: "bg-gray-200 text-gray-600",           badgeActive: "bg-gray-500 text-white"    },
+                amber:   { tab: "text-amber-600 hover:bg-amber-50 hover:text-amber-700",        tabActive: "bg-amber-100 text-amber-800",        badge: "bg-amber-200 text-amber-700",        badgeActive: "bg-amber-500 text-white"   },
+                teal:    { tab: "text-teal-600 hover:bg-teal-50 hover:text-teal-700",           tabActive: "bg-teal-100 text-teal-800",          badge: "bg-teal-200 text-teal-700",          badgeActive: "bg-teal-600 text-white"    },
+                blue:    { tab: "text-blue-600 hover:bg-blue-50 hover:text-blue-700",           tabActive: "bg-blue-100 text-blue-800",          badge: "bg-blue-200 text-blue-700",          badgeActive: "bg-blue-500 text-white"    },
+                emerald: { tab: "text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700",  tabActive: "bg-emerald-100 text-emerald-800",    badge: "bg-emerald-200 text-emerald-700",    badgeActive: "bg-emerald-600 text-white" },
+                cyan:    { tab: "text-cyan-600 hover:bg-cyan-50 hover:text-cyan-700",           tabActive: "bg-cyan-100 text-cyan-800",          badge: "bg-cyan-200 text-cyan-700",          badgeActive: "bg-cyan-600 text-white"    },
+                purple:  { tab: "text-purple-600 hover:bg-purple-50 hover:text-purple-700",     tabActive: "bg-purple-100 text-purple-800",      badge: "bg-purple-200 text-purple-700",      badgeActive: "bg-purple-600 text-white"  },
+                orange:  { tab: "text-orange-600 hover:bg-orange-50 hover:text-orange-700",     tabActive: "bg-orange-100 text-orange-800",      badge: "bg-orange-200 text-orange-700",      badgeActive: "bg-orange-500 text-white"  },
+                indigo:  { tab: "text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700",     tabActive: "bg-indigo-100 text-indigo-800",      badge: "bg-indigo-200 text-indigo-700",      badgeActive: "bg-indigo-600 text-white"  },
+                slate:   { tab: "text-slate-500 hover:bg-slate-50 hover:text-slate-700",        tabActive: "bg-slate-100 text-slate-800",        badge: "bg-slate-200 text-slate-600",        badgeActive: "bg-slate-500 text-white"   },
+                red:     { tab: "text-red-500 hover:bg-red-50 hover:text-red-700",              tabActive: "bg-red-100 text-red-800",            badge: "bg-red-200 text-red-600",            badgeActive: "bg-red-500 text-white"     },
+              };
+              const p = palette[f.color];
+
+              // thin separator before "Đã đóng" and "Từ chối"
+              const showDivider = idx > 0 && (f.key === "CLOSED" || f.key === "REJECTED");
+
+              return (
+                <div key={f.key} className="flex items-stretch shrink-0">
+                  {showDivider && <div className="w-px bg-gray-200 my-2 mx-0.5 self-stretch" />}
+                  <button
+                    onClick={() => setFilter(f.key as typeof filter)}
+                    className={`flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap transition-all duration-150 border-b-2 focus:outline-none
+                      ${active
+                        ? `${p.tabActive} border-current font-semibold`
+                        : `${p.tab} border-transparent`
+                      }
+                      ${idx === 0 ? "rounded-tl-xl" : ""}
+                      ${idx === arr.length - 1 ? "rounded-tr-xl" : ""}
+                    `}
+                  >
+                    <span>{f.label}</span>
+                    <span className={`inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full text-[11px] font-bold transition-colors
+                      ${active ? p.badgeActive : p.badge}
+                    `}>
+                      {count}
+                    </span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         </div>
         <div className="flex flex-col gap-3">
           {filtered.length === 0 && <p className="text-sm text-gray-400 text-center py-12">Không có chuyến công tác nào.</p>}
@@ -983,7 +1227,7 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                     {trip.urgent && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-red-100 text-red-600 border border-red-200">Khẩn cấp</span>}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-400">
-                    <span className="font-medium text-gray-500">{trip.id}</span>
+                    <span className="font-medium text-gray-500">{trip.tripCode}</span>
                     <span>·</span><span>{trip.departDate} – {trip.returnDate}</span>
                     <span>·</span><span>{trip.budget.toLocaleString("vi-VN")}đ</span>
                   </div>
@@ -1002,8 +1246,8 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                       <button onClick={() => { setSelected(trip); setScreen("expense"); }} className="text-sm font-medium text-purple-700 border border-purple-200 hover:bg-purple-50 px-3 py-1.5 rounded-lg transition-colors">Khai chi phí</button>
                     </>
                   )}
-                  {(trip.status === "EXPENSE_SUBMITTED" || trip.status === "PENDING_MANAGER_ADDITIONAL_APPROVAL" || trip.status === "CLOSED") && (
-                    <button onClick={() => { setSelected(trip); setScreen("expense"); }} className="text-sm font-medium text-gray-600 border border-gray-200 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition-colors">{trip.status === "CLOSED" ? "Xem chi phí" : "Xem báo cáo"}</button>
+                  {(trip.status === "EXPENSE_SUBMITTED" || trip.status === "PENDING_MANAGER_ADDITIONAL_APPROVAL" || trip.status === "EXPENSE_APPROVED" || trip.status === "CLOSED") && (
+                    <button onClick={() => { setSelected(trip); setScreen("expense"); }} className="text-sm font-medium text-gray-600 border border-gray-200 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition-colors">{trip.status === "CLOSED" || trip.status === "EXPENSE_APPROVED" ? "Xem chi phí" : "Xem báo cáo"}</button>
                   )}
                   <StatusBadge status={trip.status} violations={trip.policyViolations} />
                 </div>
@@ -1022,6 +1266,10 @@ function EmpCreate({ user, onLogout, onSuccess, onCancel }: {
   const [step, setStep] = useState(0);
   const [aiGenerated, setAiGenerated] = useState(false);
   const [generating, setGenerating] = useState(false);
+  // BUG-06: state lưu tripId sau khi tạo DRAFT và itinerary thật từ AI
+  const [draftTripId, setDraftTripId] = useState<string | null>(null);
+  const [aiItinerary, setAiItinerary] = useState<ItineraryDay[]>([]);
+  const [aiError, setAiError] = useState("");
   const [form, setForm] = useState({ from: "", to: "", departDate: "", returnDate: "", purpose: "", budget: "", urgent: false, urgentReason: "" });
   const [errs, setErrs] = useState<Record<string, string>>({});
   const set = (f: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -1083,25 +1331,28 @@ function EmpCreate({ user, onLogout, onSuccess, onCancel }: {
 
   async function submit() {
     try {
-      const [dd1, mm1, yyyy1] = form.departDate.split("/");
-      const [dd2, mm2, yyyy2] = form.returnDate.split("/");
-      const destinationType = MAJOR_CITIES.some(c => form.to.toLowerCase().includes(c))
-        ? "TIER1_CITY" : "OTHER";
-      const created = await createTrip({
-        origin: form.from,
-        destination: form.to,
-        destinationType,
-        departureDate: `${yyyy1}-${mm1}-${dd1}`,
-        returnDate: `${yyyy2}-${mm2}-${dd2}`,
-        purpose: form.purpose,
-        estimatedBudget: budget,
-        // isUrgent là server-computed (workingDays < 3) — không gửi lên
-        // urgencyReason bắt buộc khi server tính isUrgent = true
-        ...(form.urgent || isLateSubmission
-          ? { urgencyReason: form.urgentReason || undefined }
-          : {}),
-      });
-      await submitTrip(created.id);
+      let tripId = draftTripId;
+      if (!tripId) {
+        // Trip chưa được tạo (user bỏ qua bước AI) — tạo mới rồi submit
+        const [dd1, mm1, yyyy1] = form.departDate.split("/");
+        const [dd2, mm2, yyyy2] = form.returnDate.split("/");
+        const destinationType = MAJOR_CITIES.some(c => form.to.toLowerCase().includes(c))
+          ? "TIER1_CITY" : "OTHER";
+        const created = await createTrip({
+          origin: form.from,
+          destination: form.to,
+          destinationType,
+          departureDate: `${yyyy1}-${mm1}-${dd1}`,
+          returnDate: `${yyyy2}-${mm2}-${dd2}`,
+          purpose: form.purpose,
+          estimatedBudget: budget,
+          ...(form.urgent || isLateSubmission
+            ? { urgencyReason: form.urgentReason || undefined }
+            : {}),
+        });
+        tripId = created.id;
+      }
+      await submitTrip(tripId);
       onSuccess();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Không thể tạo yêu cầu.");
@@ -1224,9 +1475,57 @@ function EmpCreate({ user, onLogout, onSuccess, onCancel }: {
                       Vui lòng điền đầy đủ thông tin chuyến đi ở bước 1 trước khi sinh lịch trình AI.
                     </div>
                   )}
-                  <button onClick={() => { if (!canGenerateAI) return; setGenerating(true); setTimeout(() => { setGenerating(false); setAiGenerated(true); }, 1500); }} disabled={generating || !canGenerateAI} className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#1b2f35] hover:bg-[#243d45] text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                  <button onClick={async () => {
+                    if (!canGenerateAI) return;
+                    setGenerating(true);
+                    setAiError("");
+                    try {
+                      // BUG-06: Tạo trip DRAFT trước nếu chưa có, để lấy tripId gọi AI
+                      let tripId = draftTripId;
+                      if (!tripId) {
+                        const [dd1, mm1, yyyy1] = form.departDate.split("/");
+                        const [dd2, mm2, yyyy2] = form.returnDate.split("/");
+                        const destinationType = MAJOR_CITIES.some(c => form.to.toLowerCase().includes(c))
+                          ? "TIER1_CITY" : "OTHER";
+                        const created = await createTrip({
+                          origin: form.from,
+                          destination: form.to,
+                          destinationType,
+                          departureDate: `${yyyy1}-${mm1}-${dd1}`,
+                          returnDate: `${yyyy2}-${mm2}-${dd2}`,
+                          purpose: form.purpose,
+                          estimatedBudget: budget,
+                          ...(form.urgent || isLateSubmission
+                            ? { urgencyReason: form.urgentReason || undefined }
+                            : {}),
+                        });
+                        tripId = created.id;
+                        setDraftTripId(tripId);
+                      }
+                      // Gọi AI API thật (POST /ai/generate-itinerary)
+                      const result = await generateAiItinerary({
+                        tripId,
+                        destination: form.to,
+                        days: tripDays,
+                        budget,
+                      });
+                      setAiItinerary(aiItemsToItineraryDays(result.items));
+                      setAiGenerated(true);
+                    } catch (err) {
+                      const msg = err instanceof Error ? err.message : "Không thể sinh lịch trình.";
+                      setAiError(msg);
+                    } finally {
+                      setGenerating(false);
+                    }
+                  }} disabled={generating || !canGenerateAI} className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#1b2f35] hover:bg-[#243d45] text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                     {generating ? <><svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>Đang sinh...</> : <><svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>Sinh lịch trình bằng AI</>}
                   </button>
+                  {aiError && (
+                    <div className="mt-3 px-3.5 py-3 rounded-lg border border-red-200 bg-red-50 text-xs text-red-700">
+                      <span className="font-semibold">Lỗi sinh lịch trình: </span>{aiError}
+                      <span className="ml-1 text-gray-500">(Bạn vẫn có thể tiếp tục và bổ sung lịch trình sau.)</span>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div>
@@ -1237,10 +1536,11 @@ function EmpCreate({ user, onLogout, onSuccess, onCancel }: {
                     </div>
                     <div className="flex gap-2">
                       <ExportBtn label="Xuất PDF" />
-                      <button onClick={() => setAiGenerated(false)} className="text-xs text-emerald-600 hover:underline">Sinh lại</button>
+                      <button onClick={() => { setAiGenerated(false); setAiError(""); }} className="text-xs text-emerald-600 hover:underline">Sinh lại</button>
                     </div>
                   </div>
-                  <ItineraryList initial={AI_ITINERARY} departDate={form.departDate} />
+                  {/* BUG-06: dùng aiItinerary từ API thật thay vì AI_ITINERARY static */}
+                  <ItineraryList initial={aiItinerary} departDate={form.departDate} />
                 </div>
               )}
             </div>
@@ -1350,7 +1650,7 @@ function EmpItinerary({ user, onLogout, trip, onBack }: { user: User; onLogout: 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Nav user={user} onLogout={onLogout} />
-      <PageHeader label={trip.id} title={`${trip.from} — ${trip.to}`} subtitle={`${trip.departDate} – ${trip.returnDate} · Lịch trình`} action={<ExportBtn />} />
+      <PageHeader label={trip.tripCode} title={`${trip.from} — ${trip.to}`} subtitle={`${trip.departDate} – ${trip.returnDate} · Lịch trình`} action={<ExportBtn />} />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7">
         <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Về Dashboard</button></div>
         <Card className="p-6 sm:p-8 max-w-2xl">
@@ -1380,14 +1680,14 @@ function EmpStatus({ user, onLogout, trip, onBack }: { user: User; onLogout: () 
     { label: "Đã nộp", desc: `Nộp lúc ${trip.submittedAt}`, done: true },
     { label: "Duyệt cấp 1 (Manager)", desc: trip.managerNote || "Chờ Manager phê duyệt", done: !!trip.managerApproved, rejected: trip.status === "REJECTED" && !trip.adminApproved },
     { label: "Duyệt cấp 2 (Admin)", desc: trip.adminNote || (needsAdminApproval(trip) ? "Cần phê duyệt cấp 2" : "Không bắt buộc"), done: !!trip.adminApproved, skipped: trip.status === "APPROVED" && !needsAdminApproval(trip) },
-    { label: "Đã duyệt", desc: ["APPROVED","TRIP_IN_PROGRESS"].includes(trip.status) ? "Chuyến đi được phê duyệt" : "Chờ hoàn tất phê duyệt", done: ["APPROVED","TRIP_IN_PROGRESS","EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","CLOSED"].includes(trip.status) },
-    { label: "Quyết toán chi phí", desc: ["EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","CLOSED"].includes(trip.status) ? "Đã nộp báo cáo chi phí" : "Sau chuyến đi nộp chi phí thực tế", done: ["EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","CLOSED"].includes(trip.status) },
+    { label: "Đã duyệt", desc: ["APPROVED","TRIP_IN_PROGRESS"].includes(trip.status) ? "Chuyến đi được phê duyệt" : "Chờ hoàn tất phê duyệt", done: ["APPROVED","TRIP_IN_PROGRESS","EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","EXPENSE_APPROVED","CLOSED"].includes(trip.status) },
+    { label: "Quyết toán chi phí", desc: ["EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","EXPENSE_APPROVED","CLOSED"].includes(trip.status) ? "Đã nộp báo cáo chi phí" : "Sau chuyến đi nộp chi phí thực tế", done: ["EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","EXPENSE_APPROVED","CLOSED"].includes(trip.status) },
     { label: "Đóng hồ sơ", desc: trip.financeNote || "Finance xem xét và đóng hồ sơ", done: trip.status === "CLOSED" },
   ];
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Nav user={user} onLogout={onLogout} />
-      <PageHeader label={trip.id} title={`${trip.from} — ${trip.to}`} subtitle="Theo dõi trạng thái phê duyệt" />
+      <PageHeader label={trip.tripCode} title={`${trip.from} — ${trip.to}`} subtitle="Theo dõi trạng thái phê duyệt" />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7">
         <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Về Dashboard</button></div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -1432,7 +1732,7 @@ function EmpStatus({ user, onLogout, trip, onBack }: { user: User; onLogout: () 
 function EmpExpense({ user, onLogout, trip, onBack, onSave }: {
   user: User; onLogout: () => void; trip: Trip; onBack: () => void; onSave: () => Promise<void>;
 }) {
-  const readOnly = trip.status === "CLOSED" || trip.status === "EXPENSE_SUBMITTED" || trip.status === "PENDING_MANAGER_ADDITIONAL_APPROVAL";
+  const readOnly = trip.status === "CLOSED" || trip.status === "EXPENSE_APPROVED" || trip.status === "EXPENSE_SUBMITTED" || trip.status === "PENDING_MANAGER_ADDITIONAL_APPROVAL";
   const [expense, setExpense] = useState<BackendExpense | null>(null);
   const [expLoading, setExpLoading] = useState(true);
   const [saveErr, setSaveErr] = useState("");
@@ -1504,12 +1804,12 @@ function EmpExpense({ user, onLogout, trip, onBack, onSave }: {
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Nav user={user} onLogout={onLogout} />
-      <PageHeader label={trip.id} title="Khai báo chi phí thực tế" subtitle={`${trip.from} — ${trip.to} · ${trip.departDate} – ${trip.returnDate}`} action={<ExportBtn />} />
+      <PageHeader label={trip.tripCode} title="Khai báo chi phí thực tế" subtitle={`${trip.from} — ${trip.to} · ${trip.departDate} – ${trip.returnDate}`} action={<ExportBtn />} />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7">
         <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Về Dashboard</button></div>
         {readOnly && (
           <div className="max-w-3xl mb-4 px-3.5 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-xs text-gray-500">
-            {trip.status === "CLOSED" ? "Hồ sơ đã đóng — dữ liệu ở chế độ chỉ đọc." : "Báo cáo đã nộp — đang chờ Finance xem xét."}
+            {trip.status === "CLOSED" ? "Hồ sơ đã đóng — dữ liệu ở chế độ chỉ đọc." : trip.status === "EXPENSE_APPROVED" ? "Finance đã phê duyệt chi phí — đang chờ đóng hồ sơ." : "Báo cáo đã nộp — đang chờ Finance xem xét."}
           </div>
         )}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -1570,6 +1870,8 @@ function EmpExpense({ user, onLogout, trip, onBack, onSave }: {
 
 function ManagerApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const { trips, reload } = useTrips();
+  // BUG-10: Lấy dashboard stats từ backend API thay vì tự tính
+  const { data: dash, reload: reloadDash } = useDashboard<ManagerDashboard>();
   const [selected, setSelected] = useState<Trip | null>(null);
 
   const queue      = trips.filter(t => t.status === "SUBMITTED");
@@ -1578,14 +1880,14 @@ function ManagerApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 
   async function approve(note: string) {
     if (!selected) return;
-    try { await approveTrip(selected.id, note || "Đã phê duyệt"); await reload(); }
+    try { await approveTrip(selected.id, note || "Đã phê duyệt"); await reload(); void reloadDash(); }
     catch (err) { alert(err instanceof Error ? err.message : "Lỗi phê duyệt."); }
     setSelected(null);
   }
 
   async function reject(note: string) {
     if (!selected || !note.trim()) return;
-    try { await rejectTrip(selected.id, note); await reload(); }
+    try { await rejectTrip(selected.id, note); await reload(); void reloadDash(); }
     catch (err) { alert(err instanceof Error ? err.message : "Lỗi từ chối."); }
     setSelected(null);
   }
@@ -1594,19 +1896,33 @@ function ManagerApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 
   async function approveAdditional(note: string) {
     if (!addlSelected || !note.trim()) return;
-    try { await reapproveExpense(addlSelected.id, note); await reload(); }
+    try { await reapproveExpense(addlSelected.id, note); await reload(); void reloadDash(); }
     catch (err) { alert(err instanceof Error ? err.message : "Lỗi phê duyệt bổ sung."); }
     setAddlSelected(null);
   }
 
   if (selected) return <ApprovalDetail user={user} onLogout={onLogout} trip={selected} level={1} onApprove={approve} onReject={reject} onBack={() => setSelected(null)} />;
-  if (addlSelected) return <ApprovalDetail user={user} onLogout={onLogout} trip={addlSelected} level={1} onApprove={approveAdditional} onReject={async (note) => { try { await rejectExpense(addlSelected.id, note); await reload(); } catch(err) { alert(err instanceof Error ? err.message : "Lỗi."); } setAddlSelected(null); }} onBack={() => setAddlSelected(null)} additionalApproval />;
+  if (addlSelected) return <ApprovalDetail user={user} onLogout={onLogout} trip={addlSelected} level={1} onApprove={approveAdditional} onReject={async (note) => { try { await rejectExpense(addlSelected.id, note); await reload(); void reloadDash(); } catch(err) { alert(err instanceof Error ? err.message : "Lỗi."); } setAddlSelected(null); }} onBack={() => setAddlSelected(null)} additionalApproval />;
+
+  // Stats từ dashboard API
+  const teamTotal   = dash?.teamTrips.total ?? trips.filter(t => t.employeeId !== user.id).length;
+  const pendingCount = dash?.pendingApprovals.count ?? queue.length;
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Nav user={user} onLogout={onLogout} />
       <PageHeader label="Manager Dashboard" title="Phê duyệt yêu cầu cấp 1" subtitle="Ghi chú là bắt buộc khi duyệt hoặc từ chối." />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 flex flex-col gap-6">
+        {/* Stats từ /dashboard API — BUG-10 */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {[
+            ["Chờ duyệt cấp 1", pendingCount, "text-amber-600"],
+            ["Tổng team trips",  teamTotal,    "text-teal-700"],
+            ["Thông báo chưa đọc", dash?.notifications.unreadCount ?? "—", "text-violet-600"],
+          ].map(([k, v, c]) => (
+            <Card key={String(k)} className="p-4"><p className="text-xs text-gray-400 mb-1">{k}</p><p className={`text-2xl font-bold ${c}`}>{v}</p></Card>
+          ))}
+        </div>
         {addlQueue.length > 0 && (
           <section>
             <div className="flex items-center gap-2 mb-3">
@@ -1650,7 +1966,7 @@ function ApprovalDetail({ user, onLogout, trip, level, onApprove, onReject, onBa
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Nav user={user} onLogout={onLogout} />
-      <PageHeader label={trip.id} title={`${trip.from} — ${trip.to}`} subtitle={`${trip.departDate} – ${trip.returnDate} · ${trip.employeeName} · Duyệt cấp ${level}`} action={<ExportBtn />} />
+      <PageHeader label={trip.tripCode} title={`${trip.from} — ${trip.to}`} subtitle={`${trip.departDate} – ${trip.returnDate} · ${trip.employeeName} · Duyệt cấp ${level}`} action={<ExportBtn />} />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7">
         <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Quay lại</button></div>
         {trip.policyViolations && trip.policyViolations.length > 0 && <div className="max-w-3xl mb-4"><PolicyBanner violations={trip.policyViolations} /></div>}
@@ -1720,6 +2036,8 @@ function ApprovalDetail({ user, onLogout, trip, level, onApprove, onReject, onBa
 
 function AdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const { trips, reload } = useTrips();
+  // BUG-10: Lấy dashboard stats từ backend API
+  const { data: dash, reload: reloadDash } = useDashboard<TravelAdminDashboard>();
   const [selected, setSelected] = useState<Trip | null>(null);
   const [tab, setTab] = useState<"queue" | "all">("queue");
 
@@ -1728,18 +2046,22 @@ function AdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 
   async function approve(note: string) {
     if (!selected || !note.trim()) return;
-    try { await approveTrip(selected.id, note); await reload(); }
+    try { await approveTrip(selected.id, note); await reload(); void reloadDash(); }
     catch (err) { alert(err instanceof Error ? err.message : "Lỗi phê duyệt."); }
     setSelected(null);
   }
   async function reject(note: string) {
     if (!selected || !note.trim()) return;
-    try { await rejectTrip(selected.id, note); await reload(); }
+    try { await rejectTrip(selected.id, note); await reload(); void reloadDash(); }
     catch (err) { alert(err instanceof Error ? err.message : "Lỗi từ chối."); }
     setSelected(null);
   }
 
   if (selected) return <ApprovalDetail user={user} onLogout={onLogout} trip={selected} level={2} onApprove={approve} onReject={reject} onBack={() => setSelected(null)} />;
+
+  // Stats từ /dashboard API — BUG-10
+  const pendingL2Count = dash?.pendingL2Approvals.count ?? queue.length;
+  const totalAll = dash ? Object.values(dash.allTrips.byStatus).reduce((a, b) => a + b, 0) : all.length;
 
   const display = tab === "queue" ? queue : all;
   return (
@@ -1747,6 +2069,16 @@ function AdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
       <Nav user={user} onLogout={onLogout} />
       <PageHeader label="Travel Admin" title="Phê duyệt cấp 2" subtitle="Áp dụng khi ngân sách >20M hoặc có vi phạm chính sách." />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 flex flex-col gap-4">
+        {/* Stats từ /dashboard API — BUG-10 */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {[
+            ["Chờ duyệt cấp 2",     pendingL2Count,  "text-violet-700"],
+            ["Tổng trips hệ thống",  totalAll,        "text-[#1b2f35]"],
+            ["Thông báo chưa đọc",   dash?.notifications.unreadCount ?? "—", "text-amber-600"],
+          ].map(([k, v, c]) => (
+            <Card key={String(k)} className="p-4"><p className="text-xs text-gray-400 mb-1">{k}</p><p className={`text-2xl font-bold ${c}`}>{v}</p></Card>
+          ))}
+        </div>
         <div className="flex gap-0 border-b border-gray-200">
           {[["queue", `Chờ duyệt cấp 2 (${queue.length})`], ["all", `Tất cả (${all.length})`]].map(([k, label]) => (
             <button key={k} onClick={() => setTab(k as typeof tab)} className={`pb-3 px-4 text-sm font-medium -mb-px border-b-2 transition-colors ${tab === k ? "border-violet-600 text-violet-700" : "border-transparent text-gray-400 hover:text-gray-600"}`}>
@@ -1765,20 +2097,24 @@ function AdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 
 function FinanceApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const { trips, reload } = useTrips();
+  // BUG-10: Lấy dashboard stats từ backend API
+  const { data: dash, reload: reloadDash } = useDashboard<FinanceDashboard>();
   const [selected, setSelected] = useState<Trip | null>(null);
   const [view, setView] = useState<"dashboard" | "expense" | "close">("dashboard");
 
   const settling = trips.filter(t => t.status === "EXPENSE_SUBMITTED");
   const pending  = trips.filter(t => t.status === "PENDING_MANAGER_ADDITIONAL_APPROVAL");
   const closed   = trips.filter(t => t.status === "CLOSED");
-  const allFin   = trips.filter(t => ["APPROVED","TRIP_IN_PROGRESS","EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","CLOSED"].includes(t.status));
+  // BUG-03: EXPENSE_APPROVED = Finance approve xong nhưng chưa gọi closeTrip()
+  const readyToClose = trips.filter(t => t.status === "EXPENSE_APPROVED");
+  const allFin   = trips.filter(t => ["APPROVED","TRIP_IN_PROGRESS","EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","EXPENSE_APPROVED","CLOSED"].includes(t.status));
 
   async function handleCloseTrip(finNote: string) {
     if (!selected) return;
     try {
       await approveExpense(selected.id, finNote || undefined);
       await closeTrip(selected.id, finNote || undefined);
-      await reload();
+      await reload(); void reloadDash();
     } catch (err) { alert(err instanceof Error ? err.message : "Lỗi đóng hồ sơ."); }
     setSelected(null); setView("dashboard");
   }
@@ -1787,7 +2123,7 @@ function FinanceApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     if (!selected) return;
     try {
       await rejectExpense(selected.id, "Chi phí vượt >10% — chuyển Manager phê duyệt bổ sung (BR-TR-05).");
-      await reload();
+      await reload(); void reloadDash();
     } catch (err) { alert(err instanceof Error ? err.message : "Lỗi chuyển Manager."); }
     setSelected(null); setView("dashboard");
   }
@@ -1802,10 +2138,10 @@ function FinanceApp({ user, onLogout }: { user: User; onLogout: () => void }) {
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 flex flex-col gap-6">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            ["Chờ quyết toán", settling.length, "text-amber-600"],
-            ["Đã đóng hồ sơ",  closed.length,   "text-emerald-600"],
-            ["Tổng hồ sơ",     allFin.length,   "text-[#1b2f35]"],
-            ["Tổng dự toán",   `${(allFin.reduce((s,t)=>s+t.budget,0)/1e6).toFixed(1)}M`, "text-violet-600"],
+            ["Chờ quyết toán",  dash?.pendingExpenses.count ?? settling.length,    "text-amber-600"],
+            ["Chờ đóng hồ sơ",  dash?.pendingClose.count ?? readyToClose.length,   "text-indigo-600"],
+            ["Đã đóng hồ sơ",   closed.length,      "text-emerald-600"],
+            ["Thông báo",        dash?.notifications.unreadCount ?? "—",            "text-violet-600"],
           ].map(([k, v, c]) => (
             <Card key={String(k)} className="p-4"><p className="text-xs text-gray-400 mb-1">{k}</p><p className={`text-2xl font-bold ${c}`}>{v}</p></Card>
           ))}
@@ -1829,11 +2165,22 @@ function FinanceApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             <div className="flex flex-col gap-3">{settling.map(t => <TripCard key={t.id} trip={t} cta="Xem chi phí" onClick={() => { setSelected(t); setView("expense"); }} />)}</div>
           </section>
         )}
+        {/* BUG-03: EXPENSE_APPROVED là trạng thái riêng — Finance đã approve nhưng chưa gọi closeTrip() */}
+        {readyToClose.length > 0 && (
+          <section>
+            <div className="flex items-center gap-2 mb-3">
+              <p className="text-base font-semibold text-indigo-700">Sẵn sàng đóng hồ sơ</p>
+              <span className="bg-indigo-100 text-indigo-700 text-xs font-semibold px-2 py-0.5 rounded-full">{readyToClose.length}</span>
+            </div>
+            <div className="mb-2 text-xs text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2">Finance đã phê duyệt chi phí — nhấn "Đóng hồ sơ" để hoàn tất quy trình.</div>
+            <div className="flex flex-col gap-3">{readyToClose.map(t => <TripCard key={t.id} trip={t} cta="Đóng hồ sơ" onClick={() => { setSelected(t); setView("close"); }} />)}</div>
+          </section>
+        )}
         <section>
           <p className="text-sm font-bold text-[#1b2f35] mb-3">Tất cả hồ sơ</p>
           <div className="flex flex-col gap-3">
             {allFin.length === 0 && <p className="text-sm text-gray-400 text-center py-8 bg-white rounded-xl border border-gray-200">Chưa có hồ sơ.</p>}
-            {allFin.map(t => <TripCard key={t.id} trip={t} onClick={t.status === "EXPENSE_SUBMITTED" ? () => { setSelected(t); setView("expense"); } : undefined} />)}
+            {allFin.map(t => <TripCard key={t.id} trip={t} onClick={t.status === "EXPENSE_SUBMITTED" ? () => { setSelected(t); setView("expense"); } : t.status === "EXPENSE_APPROVED" ? () => { setSelected(t); setView("close"); } : undefined} />)}
           </div>
         </section>
       </main>
@@ -1877,7 +2224,7 @@ function FinExpense({ user, onLogout, trip, onClose, onRouteToManager, onBack }:
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Nav user={user} onLogout={onLogout} />
-      <PageHeader label={trip.id} title="Chi phí thực tế" subtitle={`${trip.from} — ${trip.to} · ${trip.employeeName}`} action={<ExportBtn />} />
+      <PageHeader label={trip.tripCode} title="Chi phí thực tế" subtitle={`${trip.from} — ${trip.to} · ${trip.employeeName}`} action={<ExportBtn />} />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7">
         <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Quay lại</button></div>
         {overTolerance && alreadyApproved && (
@@ -1961,7 +2308,7 @@ function FinClose({ user, onLogout, trip, onConfirm, onBack }: {
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Nav user={user} onLogout={onLogout} />
-      <PageHeader label={trip.id} title="Đóng hồ sơ chuyến đi" subtitle="Xác nhận để hoàn tất và lưu trữ hồ sơ quyết toán." />
+      <PageHeader label={trip.tripCode} title="Đóng hồ sơ chuyến đi" subtitle="Xác nhận để hoàn tất và lưu trữ hồ sơ quyết toán." />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7">
         <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Quay lại</button></div>
         <Card className="p-6 sm:p-8 max-w-xl">
@@ -2168,6 +2515,73 @@ function RegisterScreen({ onBack, onSuccess }: { onBack: () => void; onSuccess: 
   );
 }
 
+/**
+ * SysAdminApp — BUG-17: Component riêng cho role ADMIN (System Admin)
+ * Phân biệt với AdminApp (Travel Admin). System Admin xem thống kê toàn hệ thống,
+ * không tham gia vào approval flow.
+ */
+function SysAdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const { data: dash, loading } = useDashboard<AdminDashboard>();
+  const { trips } = useTrips();
+
+  const byStatus = trips.reduce<Record<string, number>>((acc, t) => {
+    acc[t.status] = (acc[t.status] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <div className="min-h-screen bg-gray-50 font-sans">
+      <Nav user={user} onLogout={onLogout} />
+      <PageHeader
+        label="System Admin"
+        title="Tổng quan hệ thống"
+        subtitle="Thống kê toàn bộ dữ liệu — chỉ đọc."
+      />
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 flex flex-col gap-6">
+        {/* Stats từ /dashboard API */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            ["Tổng Trip Requests",  loading ? "…" : (dash?.stats.totalTrips  ?? "—"), "text-[#1b2f35]"],
+            ["Người dùng hoạt động", loading ? "…" : (dash?.stats.totalUsers  ?? "—"), "text-emerald-700"],
+            ["Tổng Expense Claims",  loading ? "…" : (dash?.stats.totalExpenses ?? "—"), "text-violet-700"],
+            ["Thông báo chưa đọc",   loading ? "…" : (dash?.notifications.unreadCount ?? "—"), "text-amber-600"],
+          ].map(([k, v, c]) => (
+            <Card key={String(k)} className="p-4">
+              <p className="text-xs text-gray-400 mb-1">{k}</p>
+              <p className={`text-2xl font-bold ${c}`}>{v}</p>
+            </Card>
+          ))}
+        </div>
+
+        {/* Phân bổ theo status */}
+        <Card className="p-5">
+          <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-4">
+            Phân bổ Trip theo trạng thái
+          </p>
+          {Object.keys(byStatus).length === 0 && (
+            <p className="text-sm text-gray-400 text-center py-4">Chưa có dữ liệu.</p>
+          )}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {Object.entries(byStatus)
+              .sort(([, a], [, b]) => b - a)
+              .map(([status, count]) => (
+                <div key={status} className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-50 border border-gray-100">
+                  <span className="text-xs text-gray-500 font-medium truncate">{STATUS_LABEL[status as TripStatus] ?? status}</span>
+                  <span className="text-sm font-bold text-[#1b2f35] ml-2 shrink-0">{count}</span>
+                </div>
+              ))}
+          </div>
+        </Card>
+
+        <div className="px-4 py-3 rounded-lg border border-rose-200 bg-rose-50 text-xs text-rose-700">
+          <span className="font-semibold">System Admin:</span> Tài khoản này chỉ có quyền xem thống kê toàn hệ thống.
+          Mọi tác vụ phê duyệt, quản lý policy hoặc đóng hồ sơ thực hiện qua tài khoản Travel Admin hoặc Finance.
+        </div>
+      </main>
+    </div>
+  );
+}
+
 function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
   const [mode, setMode] = useState<"login" | "forgot" | "register">("login");
   const [email, setEmail]     = useState("");
@@ -2301,27 +2715,29 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
 function getRoleRoute(role: Role): string {
   switch (role) {
     case "employee": return "/employee";
-    case "manager": return "/manager";
-    case "admin": return "/admin";
-    case "finance": return "/finance";
+    case "manager":  return "/manager";
+    case "admin":    return "/admin";
+    case "sysadmin": return "/sysadmin";
+    case "finance":  return "/finance";
     default: return "/";
   }
 }
 
 function toFrontendUser(user: BackendUser): User {
+  // BUG-17 fix: TRAVEL_ADMIN → "admin", ADMIN → "sysadmin" (phân biệt quyền)
   const roleMap: Record<BackendUser['role'], Role> = {
-    EMPLOYEE: "employee",
-    MANAGER: "manager",
-    TRAVEL_ADMIN: "admin",
-    FINANCE: "finance",
-    ADMIN: "admin",
+    EMPLOYEE:     "employee",
+    MANAGER:      "manager",
+    TRAVEL_ADMIN: "admin",     // Travel Admin — phê duyệt L2, quản lý policy
+    FINANCE:      "finance",
+    ADMIN:        "sysadmin",  // System Admin — xem toàn hệ thống
   };
   const titleMap: Record<BackendUser['role'], string> = {
-    EMPLOYEE: "Nhân viên",
-    MANAGER: "Quản lý",
+    EMPLOYEE:     "Nhân viên",
+    MANAGER:      "Quản lý",
     TRAVEL_ADMIN: "Travel Admin",
-    FINANCE: "Finance",
-    ADMIN: "System Admin",
+    FINANCE:      "Finance",
+    ADMIN:        "System Admin",
   };
   return {
     id: user.id,
@@ -2373,6 +2789,7 @@ function App() {
       <Route path="/employee" element={user?.role === "employee" ? <EmployeeApp user={user} onLogout={handleLogout} /> : <Navigate to={user ? getRoleRoute(user.role) : "/" } replace />} />
       <Route path="/manager" element={user?.role === "manager" ? <ManagerApp user={user} onLogout={handleLogout} /> : <Navigate to={user ? getRoleRoute(user.role) : "/" } replace />} />
       <Route path="/admin" element={user?.role === "admin" ? <AdminApp user={user} onLogout={handleLogout} /> : <Navigate to={user ? getRoleRoute(user.role) : "/" } replace />} />
+      <Route path="/sysadmin" element={user?.role === "sysadmin" ? <SysAdminApp user={user} onLogout={handleLogout} /> : <Navigate to={user ? getRoleRoute(user.role) : "/" } replace />} />
       <Route path="/finance" element={user?.role === "finance" ? <FinanceApp user={user} onLogout={handleLogout} /> : <Navigate to={user ? getRoleRoute(user.role) : "/" } replace />} />
       <Route path="*" element={<Navigate to={user ? getRoleRoute(user.role) : "/" } replace />} />
     </Routes>

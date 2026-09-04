@@ -45,6 +45,11 @@ function setAccessToken(token: string | null): void {
   accessToken = token;
 }
 
+/** Trả về access token hiện tại — dùng cho SSE stream (EventSource không hỗ trợ Authorization header) */
+export function getAccessToken(): string | null {
+  return accessToken;
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { skipRefresh = false, headers, body, ...init } = options;
   const requestHeaders = new Headers(headers);

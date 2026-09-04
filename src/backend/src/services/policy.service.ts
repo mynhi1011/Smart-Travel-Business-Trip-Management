@@ -128,7 +128,8 @@ export function runPolicyCheck(input: PolicyCheckInput): PolicyCheckResult {
       violations.push({
         code: 'POLICY_VIOLATION_PER_DIEM_EXCEEDED',
         detail: `Phụ cấp công tác ${input.perDiemBudget.toLocaleString('vi-VN')} VNĐ vượt mức tối đa ${maxPerDiem.toLocaleString('vi-VN')} VNĐ (${input.tripDays} ngày × ${dailyRate?.toLocaleString('vi-VN')} VNĐ/ngày)`,
-        severity: 'WARNING',
+        // BUG-13 fix: BR-TR-02 quy định "không cho phép vượt" → BLOCKER thay vì WARNING
+        severity: 'BLOCKER',
         rule: 'BR-TR-02',
         limit: maxPerDiem,
         actual: input.perDiemBudget,

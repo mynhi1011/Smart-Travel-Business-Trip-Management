@@ -84,6 +84,7 @@ model RefreshToken {
 /// estimatedBudget/hotelCostPerNight/v.v: Int = VNĐ nguyên (BIGINT trong PostgreSQL)
 model Trip {
   id              String   @id @default(uuid())
+  tripCode        String   @unique @map("trip_code") // Human-readable ID: TR-YYYY-NNNN
   employeeId      String   @map("employee_id")
   origin          String
   destination     String

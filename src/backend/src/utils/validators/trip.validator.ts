@@ -47,6 +47,25 @@ function parseDateOnly(s: string): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
+/**
+ * BUG-20: Đếm ngày làm việc từ from → to (bỏ Thứ 7, Chủ nhật)
+ * Dùng nội bộ trong validator — không import policy.service để tránh circular dep.
+ * Logic giống countWorkingDays() trong policy.service.ts
+ */
+function countWorkingDaysLocal(from: Date, to: Date): number {
+  let count = 0;
+  const cur = new Date(from);
+  cur.setHours(0, 0, 0, 0);
+  const end = new Date(to);
+  end.setHours(0, 0, 0, 0);
+  while (cur < end) {
+    const dow = cur.getDay();
+    if (dow !== 0 && dow !== 6) count++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return count;
+}
+
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
 /**
@@ -176,6 +195,22 @@ export const createTripSchema = z
         path: ['returnDate'],
         message: 'Ngày về phải sau hoặc bằng ngày khởi hành',
       });
+    }
+
+    // BUG-20 fix: urgencyReason bắt buộc ở schema layer khi workingDays < 3 (BR-TR-03)
+    // Tránh phụ thuộc vào service layer để catch sớm, trước khi gọi DB
+    if (departure >= today) {
+      const workingDays = countWorkingDaysLocal(today, departure);
+      if (workingDays < 3) {
+        const reason = data.urgencyReason?.trim();
+        if (!reason || reason.length < 10) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['urgencyReason'],
+            message: `Chuyến đi khẩn cấp (còn ${workingDays} ngày làm việc): urgencyReason bắt buộc, tối thiểu 10 ký tự`,
+          });
+        }
+      }
     }
   });
 

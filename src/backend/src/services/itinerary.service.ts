@@ -5,6 +5,7 @@
 
 import prisma from '../prisma/client';
 import { Errors } from '../middlewares/error-handler';
+import { HOTEL_LIMIT } from './policy.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -27,7 +28,13 @@ const CATEGORIES = ['MEETING', 'ACCOMMODATION', 'TRANSPORT', 'MEAL', 'OTHER'] as
 async function assertOwner(tripId: string, userId: string) {
   const trip = await prisma.trip.findUnique({
     where: { id: tripId },
-    select: { employeeId: true, departureDate: true, returnDate: true, status: true },
+    select: {
+      employeeId: true,
+      departureDate: true,
+      returnDate: true,
+      status: true,
+      employee: { select: { jobGrade: true } }, // BUG-12: cần jobGrade để check hotel limit BR-TR-01
+    },
   });
   if (!trip) throw Errors.TRIP_NOT_FOUND();
   if (trip.employeeId !== userId) throw Errors.FORBIDDEN();
@@ -45,6 +52,33 @@ function validateInput(data: Partial<ItineraryItemInput>) {
 
 function computeTotalCost(items: { estimatedCost: number }[]) {
   return items.reduce((sum, i) => sum + i.estimatedCost, 0);
+}
+
+/**
+ * checkAccommodationLimit — BR-TR-01: Kiểm tra hạn mức khách sạn theo jobGrade
+ * Áp dụng khi category=ACCOMMODATION và estimatedCost > 0.
+ * Chỉ cảnh báo (WARNING) — không block — nhất quán với policy.service.ts.
+ */
+function checkAccommodationLimit(
+  category: string,
+  estimatedCost: number | undefined,
+  jobGrade: string
+): void {
+  if (category !== 'ACCOMMODATION') return;
+  if (!estimatedCost || estimatedCost <= 0) return;
+  const limit = HOTEL_LIMIT[jobGrade];
+  if (limit !== undefined && estimatedCost > limit) {
+    // Log warning — không throw (BR-TR-01 là WARNING severity trong policy.service.ts)
+    // Sẽ hiển thị thông qua policyCheckResult khi submit trip
+    console.warn(JSON.stringify({
+      level: 'WARN',
+      action: 'ACCOMMODATION_OVER_LIMIT',
+      jobGrade,
+      estimatedCost,
+      limit,
+      timestamp: new Date().toISOString(),
+    }));
+  }
 }
 
 // ─── getItinerary ─────────────────────────────────────────────────────────────
@@ -73,6 +107,9 @@ export async function getItinerary(tripId: string, userId: string, userRole: str
 export async function addItineraryItem(tripId: string, userId: string, data: ItineraryItemInput) {
   const trip = await assertOwner(tripId, userId);
   validateInput(data);
+
+  // BUG-12: Kiểm tra hotel limit BR-TR-01 khi category=ACCOMMODATION
+  checkAccommodationLimit(data.category, data.estimatedCost, trip.employee.jobGrade);
 
   const itemDate = new Date(data.itemDate + 'T00:00:00.000Z');
   const dep = new Date(trip.departureDate); dep.setUTCHours(0, 0, 0, 0);
@@ -107,16 +144,35 @@ export async function updateItineraryItem(
   tripId: string, itemId: string, userId: string,
   data: Partial<ItineraryItemInput>
 ) {
-  await assertOwner(tripId, userId);
+  const trip = await assertOwner(tripId, userId);
   validateInput(data);
 
   const item = await prisma.itineraryItem.findFirst({ where: { id: itemId, tripId } });
   if (!item) throw Errors.NOT_FOUND('itinerary item');
 
+  // BUG-12: Kiểm tra hotel limit BR-TR-01 khi update category/cost ACCOMMODATION
+  const effectiveCategory = data.category ?? item.category;
+  const effectiveCost     = data.estimatedCost ?? item.estimatedCost;
+  checkAccommodationLimit(effectiveCategory, effectiveCost, trip.employee.jobGrade);
+
+  // BUG-19 fix: re-compute dayNumber khi itemDate thay đổi
+  let newItemDate: Date | undefined;
+  let newDayNumber: number | undefined;
+  if (data.itemDate !== undefined) {
+    newItemDate = new Date(data.itemDate + 'T00:00:00.000Z');
+    const dep = new Date(trip.departureDate); dep.setUTCHours(0, 0, 0, 0);
+    const ret = new Date(trip.returnDate);    ret.setUTCHours(0, 0, 0, 0);
+    if (newItemDate < dep || newItemDate > ret) {
+      throw Errors.VALIDATION_ERROR({ fieldErrors: { itemDate: ['itemDate must be within trip date range'] }, formErrors: [] });
+    }
+    const diffMs = newItemDate.getTime() - dep.getTime();
+    newDayNumber = Math.round(diffMs / 86400000) + 1;
+  }
+
   return prisma.itineraryItem.update({
     where: { id: itemId },
     data: {
-      ...(data.itemDate      !== undefined && { itemDate:  new Date(data.itemDate + 'T00:00:00.000Z') }),
+      ...(newItemDate    !== undefined && { itemDate:  newItemDate, dayNumber: newDayNumber }),
       ...(data.timeSlot      !== undefined && { timeSlot:  data.timeSlot }),
       ...(data.location      !== undefined && { location:  data.location.trim() }),
       ...(data.activity      !== undefined && { activity:  data.activity.trim() }),
