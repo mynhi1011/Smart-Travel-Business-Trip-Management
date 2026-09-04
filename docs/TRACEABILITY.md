@@ -429,19 +429,19 @@ Mỗi endpoint phải truy ngược về ít nhất 1 REQ và 1 US:
 
 ### 8.5 Test Cases Summary
 
-| Story | Test Cases | AC Covered |
-|---|---|---|
-| US-01 | T1.1 – T1.13 (13 cases) | AC 1.1, 1.2, 1.3 ✅ |
-| US-02 | T2.1 – T2.13 (13 cases) | AC 2.1, 2.2 ✅ |
-| US-03 | T3.1 – T3.14 (14 cases) | AC 3.1, 3.2 ✅ |
-| US-04 | T4.1 – T4.12 (12 cases) | AC 4.1, 4.2 ✅ |
-| US-05 | T5.1 – T5.15 (15 cases) | AC 5.1, 5.2, 5.3 ✅ |
-| US-06 | T6.1 – T6.10 (10 cases) | AC 6.1, 6.2 ✅ |
-| US-07 | T7.1 – T7.15 (15 cases) | AC 7.1, 7.2, 7.3 ✅ |
-| US-08 | T8.1 – T8.14 (14 cases) | AC 8.1, 8.2, 8.3 ✅ |
-| US-09 | T9.1 – T9.10 (10 cases) | AC 9.1, 9.2 ✅ |
-| US-10 | T10.1 – T10.15 (15 cases) | AC 10.1, 10.2 ✅ |
-| **TOTAL** | **131 test cases** | **20/20 AC** ✅ |
+| US | Requirement | Business Rule | AC | Test Case IDs | Coverage |
+|----|-------------|---------------|----|---------------|----------|
+| US-01 | REQ-TR-01 | BR-TR-02, BR-TR-03 | AC 1.1, AC 1.2, AC 1.3 | TC-001–TC-004 | Covered |
+| US-02 | REQ-TR-02 | BR-TR-06, BR-TR-07 | AC 2.1, AC 2.2 | TC-005–TC-008 | Covered |
+| US-03 | REQ-TR-06 | BR-TR-01, BR-TR-06 | AC 3.1, AC 3.2 | TC-009–TC-012 | Covered |
+| US-04 | REQ-TR-03 | BR-TR-01, BR-TR-02, BR-TR-03, BR-TR-04 | AC 4.1, AC 4.2 | TC-013–TC-016 | Covered |
+| US-05 | REQ-TR-04, REQ-TR-05 | BR-TR-04 | AC 5.1, AC 5.2, AC 5.3 | TC-017–TC-020 | Covered |
+| US-06 | REQ-TR-05 | BR-TR-04 | AC 6.1, AC 6.2 | TC-021–TC-023 | Covered |
+| US-07 | REQ-TR-07, REQ-TR-08 | BR-TR-05 | AC 7.1, AC 7.2, AC 7.3 | TC-024–TC-027 | Covered |
+| US-08 | REQ-TR-09 | BR-TR-05, BR-TR-06 | AC 8.1, AC 8.2, AC 8.3 | TC-028–TC-031 | Covered |
+| US-09 | REQ-TR-10 | BR-TR-06 | AC 9.1, AC 9.2 | TC-032–TC-034 | Covered |
+| US-10 | REQ-TR-11, REQ-TR-12 | BR-TR-06 | AC 10.1 | TC-035 | Covered |
+| US-10 | REQ-TR-12 | BR-TR-06 | AC 10.2 | TC-036–TC-037 | Not Ready |
 
 ### 8.6 Kết luận Orphan Check
 
@@ -451,7 +451,6 @@ Mỗi endpoint phải truy ngược về ít nhất 1 REQ và 1 US:
 ✅ Không có Orphan Business Rule — 7/7 BR có enforcement
 ✅ Không có Orphan API Endpoint  — 35/35 endpoints có lý do
 ✅ Không có Orphan DB Table      — 10/10 bảng có REQ/US
-✅ 131 test cases phủ toàn bộ 20 AC
 ```
 
 ---
