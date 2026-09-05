@@ -20,7 +20,7 @@
   - **AC 1.2 (Kiểm tra phụ cấp Per Diem tự động):**  
     *Given* Employee đang lập dự toán cho mục phụ cấp cá nhân  
     *When* Employee chọn điểm đến là Đô thị loại 1 (Hà Nội, TP.HCM, Đà Nẵng) hoặc tỉnh thành khác  
-    *Then* Hệ thống tự động tính hạn mức `Max_Per_Diem = Số ngày * Mức khoán` (400.000 VNĐ/ngày với Đô thị loại 1 hoặc 300.000 VNĐ/ngày với tỉnh khác theo `BR-TR-02`) và cảnh báo nếu mục phụ cấp nhập vượt công thức này.
+    *Then* Hệ thống tự động tính hạn mức `Max_Per_Diem = Số ngày * Mức khoán` (400.000 VNĐ/ngày với Đô thị loại 1 hoặc 300.000 VNĐ/ngày với tỉnh khác theo `BR-TR-02`)
   - **AC 1.3 (Xử lý chuyến đi khẩn cấp):**  
     *Given* Employee tạo yêu cầu công tác có ngày khởi hành < 3 ngày làm việc so với ngày tạo  
     *When* Employee bấm lưu/tiếp tục  
