@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+.env.test
 
 # ── Database (SQLite dev files) ───────────────────────────────
 *.db
@@ -13,6 +14,7 @@ src/prisma/*.db
 # ── Build Output ─────────────────────────────────────────────
 dist/
 build/
+coverage/
 
 # ── Node Modules ─────────────────────────────────────────────
 node_modules/

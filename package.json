@@ -1,0 +1,19 @@
+{
+  "name": "smart-travel-business-trip-management",
+  "version": "1.0.0",
+  "description": "Smart Travel & Business Trip Management — Monorepo root",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "test:be": "npm --prefix src/backend run test:run",
+    "test:fe": "npm --prefix src/frontend run test:run",
+    "test:run": "npm run test:be && npm run test:fe",
+    "test:coverage:be": "npm --prefix src/backend run test:coverage",
+    "test:coverage:fe": "npm --prefix src/frontend run test:coverage",
+    "test:coverage": "npm run test:coverage:be && npm run test:coverage:fe",
+    "dev:be": "npm --prefix src/backend run dev",
+    "dev:fe": "npm --prefix src/frontend run dev"
+  }
+}

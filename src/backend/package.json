@@ -15,6 +15,10 @@
     "build:frontend": "npm --prefix ../frontend run build",
     "start": "node dist/server.js",
     "type-check": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest --watch",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:migrate:prod": "prisma migrate deploy",
@@ -47,9 +51,14 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20.19.43",
     "@types/pdfkit": "^0.17.6",
+    "@types/supertest": "^7.2.1",
     "@types/uuid": "^10.0.0",
+    "@vitest/coverage-v8": "^5.0.1",
     "prisma": "^5.22.0",
+    "supertest": "^7.2.2",
     "tsx": "^4.23.13",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
   }
 }
