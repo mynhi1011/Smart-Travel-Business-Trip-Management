@@ -37,6 +37,12 @@ export default mergeConfig(
       // Reporter: verbose để thấy từng it() trong CI log
       reporter: ['verbose'],
 
+      // Dùng tsconfig.test.json — có @testing-library/jest-dom types
+      // Tách biệt với tsconfig.app.json (production build không include test files)
+      typecheck: {
+        tsconfig: './tsconfig.test.json',
+      },
+
       // Coverage
       coverage: {
         provider: 'v8',

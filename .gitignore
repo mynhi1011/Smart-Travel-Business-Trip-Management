@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+.env.test
 src/backend/.env
 src/frontend/.env
 
@@ -19,8 +20,11 @@ src/frontend/node_modules/
 # ── Build Output ─────────────────────────────────────────────
 dist/
 build/
+coverage/
 src/backend/dist/
 src/frontend/dist/
+src/backend/coverage/
+src/frontend/coverage/
 
 # ── Logs ─────────────────────────────────────────────────────
 logs/
@@ -28,6 +32,12 @@ logs/
 !docs/logs/**
 *.log
 npm-debug.log*
+
+# ── Test / Debug artifacts (ad-hoc files từ quá trình phát triển) ────────────
+headers.txt
+b.json
+test_login.json
+*.curl.txt
 
 # ── OS & IDE ─────────────────────────────────────────────────
 .DS_Store

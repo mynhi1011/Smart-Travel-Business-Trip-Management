@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import * as svc from '../services/expense.service.full';
+import * as svc from '../services/expense.service';
 import { Errors } from '../middlewares/error-handler';
 import { sendSuccess, sendCreated, sendNoContent } from '../utils/response.utils';
 

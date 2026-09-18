@@ -24,10 +24,10 @@ import { notFoundHandler } from './middlewares/not-found-handler';
 import authRouter from './routes/auth.routes';
 import tripsRouter from './routes/trips.routes';
 import itineraryRouter from './routes/itinerary.routes';
-import expensesRouter from './routes/expenses.routes';
+import expensesRouter from './routes/expense.routes';
 import aiRouter from './routes/ai.routes';
 import dashboardRouter from './routes/dashboard.routes';
-import notificationsRouter from './routes/notifications.routes';
+import notificationsRouter from './routes/notification.routes';
 import pdfRouter from './routes/pdf.routes';
 
 // ─── App Factory ─────────────────────────────────────────────────────────────

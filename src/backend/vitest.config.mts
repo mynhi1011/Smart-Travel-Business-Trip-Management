@@ -38,9 +38,6 @@ export default defineConfig({
     testTimeout: 15000,
     hookTimeout: 10000,
 
-    // Report: verbose để thấy từng it() trong CI log
-    reporter: ['verbose'],
-
     // Globals: true — dùng describe/it/expect không cần import tường minh
     globals: true,
 

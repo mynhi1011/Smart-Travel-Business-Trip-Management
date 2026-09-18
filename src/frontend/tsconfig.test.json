@@ -1,0 +1,22 @@
+{
+  /**
+   * tsconfig.test.json — TypeScript config dành riêng cho Vitest
+   *
+   * Không tham chiếu trong tsconfig.json (project references) nên
+   * KHÔNG ảnh hưởng đến production build (npm run build).
+   *
+   * Vitest tự động ưu tiên tsconfig.test.json nếu tồn tại.
+   * Bổ sung @testing-library/jest-dom types để TypeScript nhận diện
+   * các matchers: toBeInTheDocument, toHaveTextContent, toBeDisabled, etc.
+   */
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "types": ["vite/client", "@testing-library/jest-dom"],
+    /* Test files cần noUnusedLocals/Parameters tắt — import helper có thể không dùng hết */
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  /* Override: bao gồm test files (không exclude như tsconfig.app.json) */
+  "include": ["src"],
+  "exclude": []
+}

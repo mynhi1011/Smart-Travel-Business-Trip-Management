@@ -23,6 +23,8 @@ import {
   submitExpense, approveExpense, rejectExpense, reapproveExpense,
   type BackendExpense, type ExpenseCategory,
 } from "./services/expenses";
+import { PolicyBanner } from "./components/PolicyBanner";
+import type { PolicyViolation } from "./components/PolicyBanner";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -44,8 +46,7 @@ type TripStatus =
   | "EXPENSE_APPROVED"   // BUG-03: Finance approve expense xong nhưng trip chưa CLOSED
   | "CLOSED";
 
-type PolicyLevel = "error" | "warning";
-type PolicyViolation = { level: PolicyLevel; code: string; message: string };
+// PolicyLevel và PolicyViolation được import từ ./components/PolicyBanner
 
 type ExpenseItem = {
   id: string; date: string; category: string; label: string;
@@ -385,21 +386,7 @@ function needsAdminApproval(trip: Trip): boolean {
   return false;
 }
 
-function PolicyBanner({ violations }: { violations: PolicyViolation[] }) {
-  if (!violations.length) return null;
-  return (
-    <div className="flex flex-col gap-2 mb-4">
-      {violations.map(v => (
-        <div key={v.code} className={`flex items-start gap-2.5 px-3.5 py-3 rounded-lg border text-sm ${v.level === "error" ? "bg-red-50 border-red-200 text-red-700" : "bg-amber-50 border-amber-200 text-amber-700"}`}>
-          <span className={`text-xs font-bold uppercase px-1.5 py-0.5 rounded shrink-0 mt-0.5 ${v.level === "error" ? "bg-red-200 text-red-700" : "bg-amber-200 text-amber-700"}`}>
-            {v.level === "error" ? "Vi phạm" : "Lưu ý"}
-          </span>
-          <span>{v.message}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
+// PolicyBanner được import từ ./components/PolicyBanner
 
 const ROLE_COLORS: Record<Role, { logo: string; bg: string; text: string; border: string }> = {
   employee: { logo: "bg-emerald-500", bg: "bg-emerald-50",  text: "text-emerald-700", border: "border-emerald-200" },
