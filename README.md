@@ -183,11 +183,11 @@ File `.env` không được commit vào repo (chứa secrets). Cần tạo thủ
 
 ```bash
 # macOS / Linux
-cd ../backend
+cd src/backend
 cp .env.example .env
 
 # Windows (PowerShell)
-cd ..\backend
+cd src\backend
 copy .env.example .env
 ```
 
@@ -211,7 +211,7 @@ npm run db:seed      # tạo tài khoản demo
 ### Bước 5 — Build frontend
 
 ```bash
-cd ../frontend
+cd src/frontend
 npm run build
 ```
 
@@ -220,7 +220,7 @@ Lệnh này tạo thư mục `src/frontend/dist/` — backend sẽ tự serve th
 ### Bước 6 — Chạy server
 
 ```bash
-cd ../backend
+cd src/backend
 npm run dev
 ```
 
