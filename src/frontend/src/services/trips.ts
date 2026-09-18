@@ -49,6 +49,13 @@ export async function createTrip(input: Record<string, unknown>): Promise<Backen
   return response.data;
 }
 
+export async function updateTrip(tripId: string, input: Record<string, unknown>): Promise<BackendTrip> {
+  const response = await apiRequest<{ data: BackendTrip }>(`/trips/${tripId}`, {
+    method: 'PATCH', body: JSON.stringify(input),
+  });
+  return response.data;
+}
+
 export async function getTripById(tripId: string): Promise<BackendTrip> {
   const response = await apiRequest<{ data: BackendTrip }>(`/trips/${tripId}`);
   return response.data;

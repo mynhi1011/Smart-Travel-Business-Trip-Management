@@ -1,7 +1,7 @@
 ﻿import { useState, useRef, useEffect } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { ApiError, authApi, getAccessToken, type BackendUser } from "./services/api";
-import { listTrips, createTrip, submitTrip, approveTrip, rejectTrip, closeTrip, type BackendTrip } from "./services/trips";
+import { listTrips, createTrip, updateTrip, submitTrip, approveTrip, rejectTrip, closeTrip, type BackendTrip } from "./services/trips";
 import { generateItinerary as generateAiItinerary, type AiItineraryItem } from "./services/ai";
 import {
   listNotifications as apiListNotifications,
@@ -1123,7 +1123,7 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [filter, setFilter] = useState<TripStatus | "all">("all");
   const myTrips = trips;
 
-  if (screen === "create")    return <EmpCreate user={user} onLogout={onLogout} onSuccess={() => { void reload(); setScreen("success"); }} onCancel={() => setScreen("dashboard")} />;
+  if (screen === "create")    return <EmpCreate user={user} onLogout={onLogout} onSuccess={() => { void reload(); setScreen("success"); }} onSaveDraft={() => { void reload(); setScreen("dashboard"); }} onCancel={() => setScreen("dashboard")} />;
   if (screen === "success")   return <EmpSuccess user={user} onLogout={onLogout} onBack={() => setScreen("dashboard")} />;
   if (screen === "itinerary" && selected) return <EmpItinerary user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} />;
   if (screen === "status"    && selected) return <EmpStatus    user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} />;
@@ -1143,6 +1143,7 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             {(
               [
                 { key: "all",                                  label: "Tất cả",             color: "gray"    },
+                { key: "DRAFT",                                label: "Bản nháp",           color: "zinc"    },
                 { key: "SUBMITTED",                            label: "Chờ duyệt cấp 1",   color: "amber"   },
                 { key: "APPROVED_MANAGER",                     label: "Đã duyệt cấp 1",    color: "teal"    },
                 { key: "PENDING_ADMIN_APPROVAL",               label: "Chờ duyệt cấp 2",   color: "blue"    },
@@ -1161,6 +1162,7 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
               // colour palette per status
               const palette: Record<string, { tab: string; tabActive: string; badge: string; badgeActive: string }> = {
                 gray:    { tab: "text-gray-500 hover:bg-gray-50 hover:text-gray-700",           tabActive: "bg-gray-100 text-gray-800",           badge: "bg-gray-200 text-gray-600",           badgeActive: "bg-gray-500 text-white"    },
+                zinc:    { tab: "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700",           tabActive: "bg-zinc-100 text-zinc-800",           badge: "bg-zinc-200 text-zinc-600",           badgeActive: "bg-zinc-500 text-white"    },
                 amber:   { tab: "text-amber-600 hover:bg-amber-50 hover:text-amber-700",        tabActive: "bg-amber-100 text-amber-800",        badge: "bg-amber-200 text-amber-700",        badgeActive: "bg-amber-500 text-white"   },
                 teal:    { tab: "text-teal-600 hover:bg-teal-50 hover:text-teal-700",           tabActive: "bg-teal-100 text-teal-800",          badge: "bg-teal-200 text-teal-700",          badgeActive: "bg-teal-600 text-white"    },
                 blue:    { tab: "text-blue-600 hover:bg-blue-50 hover:text-blue-700",           tabActive: "bg-blue-100 text-blue-800",          badge: "bg-blue-200 text-blue-700",          badgeActive: "bg-blue-500 text-white"    },
@@ -1221,6 +1223,9 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <button onClick={() => { setSelected(trip); setScreen("status"); }} className="text-sm font-medium text-gray-600 border border-gray-200 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition-colors">Trạng thái</button>
+                  {trip.status === "DRAFT" && (
+                    <button onClick={() => setScreen("create")} className="text-sm font-medium text-zinc-700 border border-zinc-300 hover:bg-zinc-50 px-3 py-1.5 rounded-lg transition-colors">Tiếp tục soạn thảo</button>
+                  )}
                   {trip.status === "APPROVED" && (
                     <>
                       <button onClick={() => { setSelected(trip); setScreen("itinerary"); }} className="text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors">Lịch trình</button>
@@ -1247,8 +1252,8 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   );
 }
 
-function EmpCreate({ user, onLogout, onSuccess, onCancel }: {
-  user: User; onLogout: () => void; onSuccess: () => void; onCancel: () => void;
+function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
+  user: User; onLogout: () => void; onSuccess: () => void; onSaveDraft: () => void; onCancel: () => void;
 }) {
   const [step, setStep] = useState(0);
   const [aiGenerated, setAiGenerated] = useState(false);
@@ -1257,6 +1262,8 @@ function EmpCreate({ user, onLogout, onSuccess, onCancel }: {
   const [draftTripId, setDraftTripId] = useState<string | null>(null);
   const [aiItinerary, setAiItinerary] = useState<ItineraryDay[]>([]);
   const [aiError, setAiError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [form, setForm] = useState({ from: "", to: "", departDate: "", returnDate: "", purpose: "", budget: "", urgent: false, urgentReason: "" });
   const [errs, setErrs] = useState<Record<string, string>>({});
   const set = (f: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -1314,6 +1321,55 @@ function EmpCreate({ user, onLogout, onSuccess, onCancel }: {
   function goNext() {
     if (step === 0 && !validateStep0()) return;
     setStep(s => s + 1);
+  }
+
+  async function saveDraft() {
+    // Bước 1: validate tối thiểu — cần ít nhất from + to để lưu
+    if (!form.from.trim() || !form.to.trim()) {
+      setSaveMsg({ ok: false, text: "Vui lòng nhập ít nhất điểm xuất phát và điểm đến." });
+      setTimeout(() => setSaveMsg(null), 3000);
+      return;
+    }
+
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const [dd1 = "01", mm1 = "01", yyyy1 = "2099"] = form.departDate ? form.departDate.split("/") : [];
+      const [dd2 = "01", mm2 = "01", yyyy2 = "2099"] = form.returnDate ? form.returnDate.split("/") : [];
+      const destinationType = MAJOR_CITIES.some(c => form.to.toLowerCase().includes(c))
+        ? "TIER1_CITY" : "OTHER";
+
+      const payload: Record<string, unknown> = {
+        origin:           form.from.trim() || "TBD",
+        destination:      form.to.trim()   || "TBD",
+        destinationType,
+        departureDate:    form.departDate ? `${yyyy1}-${mm1}-${dd1}` : "2099-01-01",
+        returnDate:       form.returnDate  ? `${yyyy2}-${mm2}-${dd2}` : "2099-01-02",
+        purpose:          form.purpose.trim() || "Đang soạn thảo — chưa hoàn chỉnh",
+        estimatedBudget:  Number(form.budget.replace(/[^0-9]/g, "")) || 1,
+        ...(form.urgent || isLateSubmission
+          ? { urgencyReason: form.urgentReason.trim() || undefined }
+          : {}),
+      };
+
+      if (!draftTripId) {
+        // Lần đầu — tạo mới (POST)
+        const created = await createTrip(payload);
+        setDraftTripId(created.id);
+        setSaveMsg({ ok: true, text: `Đã lưu nháp · Mã: ${created.tripCode}` });
+      } else {
+        // Đã tạo trước đó — cập nhật (PATCH)
+        const updated = await updateTrip(draftTripId, payload);
+        setSaveMsg({ ok: true, text: `Đã cập nhật nháp · Mã: ${updated.tripCode}` });
+      }
+      // Quay về dashboard sau 1.2s để user thấy toast trước khi chuyển màn
+      setTimeout(() => onSaveDraft(), 1200);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Không thể lưu nháp.";
+      setSaveMsg({ ok: false, text: msg });
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function submit() {
@@ -1571,9 +1627,23 @@ function EmpCreate({ user, onLogout, onSuccess, onCancel }: {
             <button onClick={step === 0 ? onCancel : () => setStep(s => s - 1)} className="px-5 py-2.5 text-sm font-semibold text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
               {step === 0 ? "Huỷ" : "Quay lại"}
             </button>
-            <div className="flex gap-2">
-              <button className="px-5 py-2.5 text-sm font-semibold text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50">Lưu nháp</button>
-              {step < 2 ? <button onClick={goNext} className="px-5 py-2.5 text-sm font-semibold text-white bg-[#1b2f35] hover:bg-[#243d45] rounded-lg shadow-sm transition-colors">Tiếp tục</button> : <button onClick={submit} disabled={isLateSubmission && (!form.urgent || !form.urgentReason.trim())} className="px-5 py-2.5 text-sm font-semibold text-white bg-[#1b2f35] hover:bg-[#243d45] rounded-lg shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Gửi yêu cầu duyệt</button>}
+            <div className="flex items-center gap-2">
+              {saveMsg && (
+                <span className={`text-xs font-medium px-2.5 py-1.5 rounded-lg ${saveMsg.ok ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-600 border border-red-200"}`}>
+                  {saveMsg.ok ? "✓ " : "✗ "}{saveMsg.text}
+                </span>
+              )}
+              <button
+                onClick={() => void saveDraft()}
+                disabled={saving}
+                className="px-5 py-2.5 text-sm font-semibold text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {saving ? "Đang lưu..." : "Lưu nháp"}
+              </button>
+              {step < 2
+                ? <button onClick={goNext} className="px-5 py-2.5 text-sm font-semibold text-white bg-[#1b2f35] hover:bg-[#243d45] rounded-lg shadow-sm transition-colors">Tiếp tục</button>
+                : <button onClick={submit} disabled={isLateSubmission && (!form.urgent || !form.urgentReason.trim())} className="px-5 py-2.5 text-sm font-semibold text-white bg-[#1b2f35] hover:bg-[#243d45] rounded-lg shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Gửi yêu cầu duyệt</button>
+              }
             </div>
           </div>
         </div>
