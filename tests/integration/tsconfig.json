@@ -1,0 +1,25 @@
+{
+  /**
+   * tsconfig.json — TypeScript config cho tests/integration/
+   *
+   * Extend từ backend tsconfig nhưng bỏ rootDir restriction.
+   * Vitest sử dụng file này để resolve types khi chạy test.
+   * NOTE: tsc standalone sẽ không thấy vitest types (chỉ vitest runner mới resolve được).
+   * Để type-check integration tests, chạy: vitest typecheck (hoặc qua vitest runner).
+   */
+  "extends": "../../src/backend/tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../../",
+    "noEmit": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": [
+    "./**/*.test.ts",
+    "../../src/backend/src/**/*.ts"
+  ],
+  "exclude": [
+    "../../src/backend/node_modules",
+    "../../src/backend/dist"
+  ]
+}

@@ -15,5 +15,12 @@
     "test:coverage": "npm run test:coverage:be && npm run test:coverage:fe",
     "dev:be": "npm --prefix src/backend run dev",
     "dev:fe": "npm --prefix src/frontend run dev"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "9.0.10",
+    "@types/supertest": "7.2.1",
+    "jsonwebtoken": "9.0.3",
+    "supertest": "7.2.2",
+    "vitest": "5.0.1"
   }
 }
