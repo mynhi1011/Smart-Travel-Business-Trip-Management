@@ -1,0 +1,30 @@
+{
+  /**
+   * tsconfig.json — TypeScript config cho tests/unit/
+   *
+   * Extend từ backend tsconfig nhưng bỏ rootDir restriction
+   * để cho phép import từ src/backend/src/ khi test file nằm ở tests/unit/.
+   *
+   * Vitest sử dụng file này để resolve types khi chạy test.
+   */
+  "extends": "../../src/backend/tsconfig.json",
+  "compilerOptions": {
+    /* Bỏ rootDir để test files ngoài src/ vẫn compile được */
+    "rootDir": "../../",
+    "noEmit": true,
+    /* Tắt unused checks trong test files cho tiện */
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "paths": {
+      "@/*": ["../../src/backend/src/*"]
+    }
+  },
+  "include": [
+    "./**/*.test.ts",
+    "../../src/backend/src/**/*.ts"
+  ],
+  "exclude": [
+    "../../src/backend/node_modules",
+    "../../src/backend/dist"
+  ]
+}

@@ -28,8 +28,12 @@ export default defineConfig({
     // Global setup: set process.env cho test environment
     setupFiles: ['./src/__tests__/setup.ts'],
 
-    // Glob: tất cả *.test.ts và *.api.test.ts trong src/
-    include: ['src/**/*.test.ts', 'src/**/*.api.test.ts'],
+    // Glob: unit tests trong src/ VÀ tests/unit/ (Task 4 output)
+    include: [
+      'src/**/*.test.ts',
+      'src/**/*.api.test.ts',
+      '../../tests/unit/**/*.test.ts',
+    ],
 
     // Bỏ qua dist/ và node_modules/
     exclude: ['dist/**', 'node_modules/**'],
