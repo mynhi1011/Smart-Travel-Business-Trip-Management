@@ -110,3 +110,22 @@ export async function closeTrip(req: Request, res: Response, next: NextFunction)
     sendSuccess(res, result);
   } catch (err) { next(err); }
 }
+
+// ─── startTrip ────────────────────────────────────────────────────────────────
+export async function startTrip(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.user) { next(Errors.UNAUTHORIZED()); return; }
+    const result = await tripService.startTrip(req.params['id'] ?? '', req.user.id, req.ip ?? undefined);
+    sendSuccess(res, result);
+  } catch (err) { next(err); }
+}
+
+// ─── endTrip ──────────────────────────────────────────────────────────────────
+export async function endTrip(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.user) { next(Errors.UNAUTHORIZED()); return; }
+    const result = await tripService.endTrip(req.params['id'] ?? '', req.user.id, req.ip ?? undefined);
+    sendSuccess(res, result);
+  } catch (err) { next(err); }
+}
+

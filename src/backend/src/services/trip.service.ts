@@ -9,7 +9,7 @@
 import prisma from '../prisma/client';
 import { logAudit, AuditActions } from './audit.service';
 import { createNotification } from './notification.service';
-import { countWorkingDays, runPolicyCheck } from './policy.service';
+import { countWorkingDays, runPolicyCheck, requiresLevel2FromViolations } from './policy.service';
 import { routeApproval } from './approval.service';
 import { calculateTripDays } from '../utils/date.utils';
 import { checkPerDiemWarning } from '../utils/validators/trip.validator';
@@ -24,8 +24,8 @@ export const VALID_TRANSITIONS: Record<string, string[]> = {
   PENDING_ADMIN_APPROVAL: ['APPROVED', 'REJECTED'],
   APPROVED:               ['ONGOING'],
   ONGOING:                ['EXPENSE_DRAFT'],
-  EXPENSE_DRAFT:          ['EXPENSE_SUBMITTED'],
-  EXPENSE_SUBMITTED:      ['EXPENSE_APPROVED', 'EXPENSE_REJECTED', 'MANAGER_REAPPROVE'],
+  EXPENSE_DRAFT:          ['EXPENSE_SUBMITTED', 'MANAGER_REAPPROVE'], // BR-TR-05: >10% (giá trị thô) → Manager duyệt bổ sung ngay khi submit
+  EXPENSE_SUBMITTED:      ['EXPENSE_APPROVED', 'EXPENSE_REJECTED'],
   EXPENSE_APPROVED:       ['CLOSED'],
   EXPENSE_REJECTED:       ['EXPENSE_DRAFT'],
   MANAGER_REAPPROVE:      ['EXPENSE_SUBMITTED'],
@@ -269,6 +269,64 @@ export async function deleteTrip(tripId: string, userId: string): Promise<void> 
   await prisma.trip.delete({ where: { id: tripId } });
 }
 
+// ─── startTrip — Employee bắt đầu chuyến đi (APPROVED → ONGOING) ──────────────
+export async function startTrip(
+  tripId: string,
+  userId: string,
+  ipAddress?: string
+): Promise<unknown> {
+  const trip = await prisma.trip.findUnique({ where: { id: tripId } });
+  if (!trip) throw Errors.TRIP_NOT_FOUND();
+  if (trip.employeeId !== userId) throw Errors.FORBIDDEN();
+
+  const allowed = VALID_TRANSITIONS[trip.status] ?? [];
+  if (trip.status === 'CLOSED') throw Errors.TRIP_IMMUTABLE();
+  if (!allowed.includes('ONGOING'))
+    throw Errors.INVALID_STATUS_TRANSITION(trip.status, 'ONGOING');
+
+  const updated = await prisma.trip.update({
+    where: { id: tripId },
+    data: { status: 'ONGOING' },
+  });
+
+  await logAudit({
+    userId, entityType: 'TRIP', entityId: tripId,
+    action: AuditActions.TRIP_STARTED, previousState: 'APPROVED', newState: 'ONGOING',
+    ipAddress: ipAddress ?? null,
+  });
+
+  return formatTrip(updated as unknown as Record<string, unknown>);
+}
+
+// ─── endTrip — Employee kết thúc chuyến đi (ONGOING → EXPENSE_DRAFT) ──────────
+export async function endTrip(
+  tripId: string,
+  userId: string,
+  ipAddress?: string
+): Promise<unknown> {
+  const trip = await prisma.trip.findUnique({ where: { id: tripId } });
+  if (!trip) throw Errors.TRIP_NOT_FOUND();
+  if (trip.employeeId !== userId) throw Errors.FORBIDDEN();
+  if (trip.status === 'CLOSED') throw Errors.TRIP_IMMUTABLE();
+
+  const allowed = VALID_TRANSITIONS[trip.status] ?? [];
+  if (!allowed.includes('EXPENSE_DRAFT'))
+    throw Errors.INVALID_STATUS_TRANSITION(trip.status, 'EXPENSE_DRAFT');
+
+  const updated = await prisma.trip.update({
+    where: { id: tripId },
+    data: { status: 'EXPENSE_DRAFT' },
+  });
+
+  await logAudit({
+    userId, entityType: 'TRIP', entityId: tripId,
+    action: AuditActions.TRIP_ENDED, previousState: 'ONGOING', newState: 'EXPENSE_DRAFT',
+    ipAddress: ipAddress ?? null,
+  });
+
+  return formatTrip(updated as unknown as Record<string, unknown>);
+}
+
 // ─── submitTrip ───────────────────────────────────────────────────────────────
 export async function submitTrip(
   tripId: string,
@@ -390,8 +448,13 @@ export async function approveTrip(
     // NFR-TR-03 — RBAC ownership check: approverId phải là managerId của employee
     if (isManagerApprove && trip.employee.managerId !== approverId) throw Errors.FORBIDDEN();
 
-    const hasViolations  = (trip.policyCheckResult?.violationCount ?? 0) > 0;
-    const routing        = routeApproval({ totalBudget: trip.estimatedBudget, hasViolations });
+    // Thống nhất nguồn sự thật với runPolicyCheck: chỉ đếm vi phạm white-list
+    // BR-TR-04 (không đếm cả violationCount) — tự sửa trip cũ đã lưu requiresLevel2 sai
+    const savedViolations: Array<{ code: string; severity: string }> = trip.policyCheckResult
+      ? JSON.parse(trip.policyCheckResult.violations)
+      : [];
+    const hasViolations = requiresLevel2FromViolations(savedViolations);
+    const routing       = routeApproval({ totalBudget: trip.estimatedBudget, hasViolations });
     const newStatus      = isTravelAdminApprove ? 'APPROVED' : routing.decision;
     const approvalLevel  = isManagerApprove ? 'LEVEL_1' : 'LEVEL_2';
     const auditAction    = isManagerApprove ? AuditActions.MANAGER_APPROVED : AuditActions.ADMIN_APPROVED;
@@ -498,6 +561,10 @@ export async function closeTrip(
     const expense = trip.expense;
     if (!expense || expense.status !== 'APPROVED')
       throw Errors.INVALID_STATUS_TRANSITION(trip.status, 'CLOSED (expense must be APPROVED)');
+
+    // BR-TR-05: hồ sơ >10% chưa có Manager duyệt bổ sung ⇒ Finance KHÔNG được đóng (422)
+    if (expense.managerReapprovalRequired && !expense.managerReapproved)
+      throw Errors.EXPENSE_VARIANCE_EXCEEDED(expense.variancePct ?? 0);
 
     // BUG-23 fix: optimistic concurrency — thêm status check trong where clause
     // Nếu status đã bị thay đổi bởi concurrent request, update sẽ không match

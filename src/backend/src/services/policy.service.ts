@@ -94,6 +94,25 @@ export function countWorkingDays(from: Date, to: Date): number {
   return count;
 }
 
+// ─── White-list: vi phạm THẬT buộc duyệt cấp 2 (BR-TR-04) ────────────────────
+// Chỉ các code này đẩy trip sang 2 cấp — ghi chú/INFO (vd PER_DIEM_NOTE của FE,
+// warning BR-TR-01 accommodation) KHÔNG được tính.
+const LEVEL2_REQUIRED_CODES: ReadonlySet<string> = new Set([
+  'POLICY_VIOLATION_PER_DIEM_EXCEEDED', // BR-TR-02 — vượt per diem
+  'URGENT_TRIP_NOTICE',                 // BR-TR-03 — LATE_SUBMISSION: nộp < 3 ngày làm việc
+  'POLICY_VIOLATION_BUDGET_THRESHOLD',   // BR-TR-04 — ngân sách > 20 triệu
+]);
+
+/**
+ * requiresLevel2FromViolations — hàm thuần duy nhất quyết định "cần cấp 2"
+ * từ danh sách violations. Dùng thống nhất ở runPolicyCheck và approveTrip.
+ */
+export function requiresLevel2FromViolations(
+  violations: ReadonlyArray<{ code: string; severity: string }>
+): boolean {
+  return violations.some((v) => LEVEL2_REQUIRED_CODES.has(v.code) && v.severity !== 'INFO');
+}
+
 // ─── Policy Check Engine ──────────────────────────────────────────────────────
 
 /**
@@ -128,8 +147,8 @@ export function runPolicyCheck(input: PolicyCheckInput): PolicyCheckResult {
       violations.push({
         code: 'POLICY_VIOLATION_PER_DIEM_EXCEEDED',
         detail: `Phụ cấp công tác ${input.perDiemBudget.toLocaleString('vi-VN')} VNĐ vượt mức tối đa ${maxPerDiem.toLocaleString('vi-VN')} VNĐ (${input.tripDays} ngày × ${dailyRate?.toLocaleString('vi-VN')} VNĐ/ngày)`,
-        // BUG-13 fix: BR-TR-02 quy định "không cho phép vượt" → BLOCKER thay vì WARNING
-        severity: 'BLOCKER',
+        // D-10: Per Diem vượt mức là WARNING — không chặn submit. Chỉ ảnh hưởng quyết định phê duyệt ở bước Manager/Travel Admin review.
+        severity: 'WARNING',
         rule: 'BR-TR-02',
         limit: maxPerDiem,
         actual: input.perDiemBudget,
@@ -162,7 +181,8 @@ export function runPolicyCheck(input: PolicyCheckInput): PolicyCheckResult {
     });
   }
 
-  const requiresLevel2 = violations.length > 0;
+  // Chỉ vi phạm white-list BR-TR-04 (per diem / late / budget) mới buộc cấp 2
+  const requiresLevel2 = requiresLevel2FromViolations(violations);
 
   return {
     passed: violations.length === 0,

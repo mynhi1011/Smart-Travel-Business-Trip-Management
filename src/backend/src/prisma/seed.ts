@@ -278,7 +278,7 @@ async function seedTrips(): Promise<void> {
         status:           'SUBMITTED',
         isUrgent:         false,
         urgencyReason:    null,
-        requiresLevel2:   true,        // Do có violation → cần level 2
+        requiresLevel2:   false,       // 15 triệu + chỉ warning BR-TR-01 (ngoài white-list BR-TR-04) → 1 cấp
         submittedAt:      new Date(now.getTime() - 2 * 60 * 60 * 1000), // 2 tiếng trước
       },
 
@@ -334,8 +334,8 @@ async function seedPolicyCheckResults(): Promise<void> {
         tripId:                IDS.TRIP_SUBMITTED,
         passed:                false,
         violations,
-        violationCount:        1,
-        requiresLevel2Approval: true,
+        violationCount:        1,         // vẫn còn warning BR-TR-01 accommodation (để hiển thị banner)
+        requiresLevel2Approval: false,    // white-list BR-TR-04 không match → 1 cấp
         checkedAt:             new Date(),
       },
     ],
@@ -434,6 +434,12 @@ async function seedItineraryItems(): Promise<void> {
 
 async function seedExpenses(): Promise<void> {
   console.log('  → Seeding expense data...');
+
+  // BR-TR-05 (luồng mới): expense >10% (giá trị thô) khi submit → trip = MANAGER_REAPPROVE
+  // (chờ Manager duyệt bổ sung), chỉ sau khi Manager duyệt mới về EXPENSE_SUBMITTED cho Finance.
+  // Seed dưới đây là expense DRAFT (chưa submit) nên không cần cờ managerReapprovalRequired.
+  // LƯU Ý: dữ liệu cũ tạo trước luồng mới có thể còn trip EXPENSE_SUBMITTED kèm
+  // managerReapprovalRequired=true (trạng thái lái so với luồng mới) → chạy `npm run db:reset`.
 
   // Expense DRAFT cho Trip APPROVED (Trần Thị Bảo đang kê khai)
   await prisma.expense.createMany({

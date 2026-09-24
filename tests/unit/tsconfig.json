@@ -12,16 +12,27 @@
     /* Bỏ rootDir để test files ngoài src/ vẫn compile được */
     "rootDir": "../../",
     "noEmit": true,
+    /* moduleResolution "node" (kế thừa từ backend) bị TS 6.x deprecate (TS5107). */
+    /* Override bằng "nodenext" tương thích cả TS 5.9 và TS 6.x, không cần */
+    /* ignoreDeprecations (TS 5.9 không hiểu option này), chỉ type-check test. */
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     /* Tắt unused checks trong test files cho tiện */
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "paths": {
-      "@/*": ["../../src/backend/src/*"]
+      "@/*": ["../../src/backend/src/*"],
+      /* tsc standalone chạy từ tests/unit — node_modules nằm ở src/backend, */
+      /* không có ở tests/unit cha → map tường minh để resolve vitest types */
+      "vitest": ["../../src/backend/node_modules/vitest/dist/index.d.ts"]
     }
   },
   "include": [
     "./**/*.test.ts",
-    "../../src/backend/src/**/*.ts"
+    "../../src/backend/src/services/**/*.ts",
+    "../../src/backend/src/middlewares/error-handler.ts",
+    "../../src/backend/src/middlewares/logger.ts",
+    "../../src/backend/src/prisma/client.ts"
   ],
   "exclude": [
     "../../src/backend/node_modules",

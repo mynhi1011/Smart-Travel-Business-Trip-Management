@@ -9,7 +9,7 @@ import { roleGuard } from '../middlewares/role.guard';
 import { immutableGuard } from '../middlewares/immutable.guard';
 import {
   createTrip, listTrips, getTripById, updateTrip, deleteTrip,
-  submitTrip, approveTrip, rejectTrip, closeTrip,
+  submitTrip, approveTrip, rejectTrip, closeTrip, startTrip, endTrip,
 } from '../controllers/trip.controller';
 
 const router = Router();
@@ -23,6 +23,8 @@ router.delete('/:id',authGuard, roleGuard(['EMPLOYEE']),                     del
 
 // Actions
 router.post('/:id/submit',  authGuard, roleGuard(['EMPLOYEE']),                       submitTrip);
+router.post('/:id/start',   authGuard, roleGuard(['EMPLOYEE']), immutableGuard,     startTrip);
+router.post('/:id/end',     authGuard, roleGuard(['EMPLOYEE']), immutableGuard,     endTrip);
 router.post('/:id/approve', authGuard, roleGuard(['MANAGER', 'TRAVEL_ADMIN']),        approveTrip);
 router.post('/:id/reject',  authGuard, roleGuard(['MANAGER', 'TRAVEL_ADMIN']),        rejectTrip);
 router.post('/:id/close',   authGuard, roleGuard(['FINANCE']),                        closeTrip);

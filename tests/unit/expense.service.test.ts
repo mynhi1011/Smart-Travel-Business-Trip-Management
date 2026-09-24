@@ -480,14 +480,14 @@ describe('submitExpense — BR-TR-05', () => {
 
     // $transaction mock cần trả về expense updated
     const updatedExpense = makeExpenseRecord({ status: 'SUBMITTED' });
-    vi.mocked(prisma.$transaction).mockImplementation(async (fn: (tx: unknown) => unknown) => {
+    vi.mocked(prisma.$transaction).mockImplementation((((fn: (tx: unknown) => unknown) => {
       const mockTx = {
         expense: { update: vi.fn().mockResolvedValue(updatedExpense) },
         trip:    { update: vi.fn().mockResolvedValue({}) },
         user:    { findMany: vi.fn().mockResolvedValue([]) },
       };
-      return fn(mockTx);
-    });
+      return fn(mockTx) as Promise<unknown>;
+    }) as unknown) as never);
 
     const result = await submitExpense(TRIP_ID, OWNER_ID);
     expect(result).toBeDefined();
@@ -554,12 +554,12 @@ describe('rejectExpense', () => {
     );
 
     const updatedExpense = makeExpenseRecord({ status: 'REJECTED' });
-    vi.mocked(prisma.$transaction).mockImplementation(async (fn: (tx: unknown) => unknown) => {
+    vi.mocked(prisma.$transaction).mockImplementation((((fn: (tx: unknown) => unknown) => {
       return fn({
         expense: { update: vi.fn().mockResolvedValue(updatedExpense) },
         trip:    { update: vi.fn().mockResolvedValue({}) },
-      });
-    });
+      }) as Promise<unknown>;
+    }) as unknown) as never);
 
     const result = await rejectExpense(TRIP_ID, OTHER_USER, 'Chi phí không hợp lệ');
     expect(result).toBeDefined();
@@ -601,12 +601,12 @@ describe('approveExpense', () => {
     );
 
     const updatedExpense = makeExpenseRecord({ status: 'APPROVED' });
-    vi.mocked(prisma.$transaction).mockImplementation(async (fn: (tx: unknown) => unknown) => {
+    vi.mocked(prisma.$transaction).mockImplementation((((fn: (tx: unknown) => unknown) => {
       return fn({
         expense: { update: vi.fn().mockResolvedValue(updatedExpense) },
         trip:    { update: vi.fn().mockResolvedValue({}) },
-      });
-    });
+      }) as Promise<unknown>;
+    }) as unknown) as never);
 
     const result = await approveExpense(TRIP_ID, OTHER_USER);
     expect(result).toBeDefined();

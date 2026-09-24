@@ -11,7 +11,7 @@
    */
   "extends": "./tsconfig.app.json",
   "compilerOptions": {
-    "types": ["vite/client", "@testing-library/jest-dom"],
+    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom/vitest"],
     /* Test files cần noUnusedLocals/Parameters tắt — import helper có thể không dùng hết */
     "noUnusedLocals": false,
     "noUnusedParameters": false

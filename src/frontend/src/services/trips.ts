@@ -93,3 +93,16 @@ export async function closeTrip(tripId: string, comment?: string): Promise<Backe
 export async function deleteTrip(tripId: string): Promise<void> {
   await apiRequest<void>(`/trips/${tripId}`, { method: 'DELETE' });
 }
+
+/** Employee bắt đầu chuyến đi: APPROVED → ONGOING. */
+export async function startTrip(tripId: string): Promise<BackendTrip> {
+  const response = await apiRequest<{ data: BackendTrip }>(`/trips/${tripId}/start`, { method: 'POST' });
+  return response.data;
+}
+
+/** Employee kết thúc chuyến đi: ONGOING → EXPENSE_DRAFT (chờ khai chi phí). */
+export async function endTrip(tripId: string): Promise<BackendTrip> {
+  const response = await apiRequest<{ data: BackendTrip }>(`/trips/${tripId}/end`, { method: 'POST' });
+  return response.data;
+}
+

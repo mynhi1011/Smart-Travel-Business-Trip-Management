@@ -41,9 +41,11 @@
     │                             │                                       │
     │                     EXPENSE_APPROVED                       [Manager duyệt bổ sung]
     │                             │                                       │
-    │                    [Finance gọi Close]                  EXPENSE_SUBMITTED (loop)
-    │                             │
-    │                          CLOSED (Read-only / Immutable — BR-TR-06)
+    │                    [Finance gọi Close]                       EXPENSE_SUBMITTED 
+    │                             │                                       │
+    │                             │                               [Finance gọi Close]                 
+    │                             │                                       │
+    │                              CLOSED (Read-only / Immutable — BR-TR-06)
 ```
 
 > `(*)` = Internal state — không expose ra external API response dưới dạng trạng thái cuối

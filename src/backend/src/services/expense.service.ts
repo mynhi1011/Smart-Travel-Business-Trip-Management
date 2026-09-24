@@ -50,7 +50,41 @@ export interface ExpenseItemInput {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * calculateVariance — Tính variance giữa chi phí thực tế và dự toán (BR-TR-05)
+ * exceedsManagerThreshold — So sánh ngưỡng BR-TR-05 trên giá trị THÔ bằng số nguyên.
+ *
+ * Chỉ cần Manager duyệt bổ sung khi `actual / budget > 110%`. Quy về số nguyên
+ * (đơn vị hundredths) để loại bỏ sai số dấu phẩy động:
+ *
+ *   actualHundredths * 100 > budgetHundredths * 110   ⇔   actual / budget > 1.10
+ *
+ * KHÔNG dùng giá trị % đã làm tròn để quyết định.
+ * `budget ≤ 0` ⇒ mọi khoản chi > 0 đều tính là vượt ngưỡng (an toàn, không chia cho 0).
+ *
+ * @param totalActual - Tổng chi phí thực tế (VNĐ)
+ * @param estimatedBudget - Dự toán ban đầu (VNĐ)
+ */
+export function exceedsManagerThreshold(
+  totalActual: number,
+  estimatedBudget: number
+): boolean {
+  const actualHundredths = Math.round(totalActual * 100);
+  const budgetHundredths = Math.round(estimatedBudget * 100);
+
+  if (budgetHundredths <= 0) return actualHundredths > 0;
+
+  return (
+    actualHundredths * 100 > budgetHundredths * (100 + VARIANCE_JUSTIFICATION_THRESHOLD)
+  );
+}
+
+/**
+ * calculateVariance — NGUỒN DUY NHẤT tính variance giữa chi phí thực tế và dự toán
+ * (BR-TR-05). Mọi nơi cần variancePct / varianceAmount / requiresManagerReapproval
+ * đều phải gọi hàm này.
+ *
+ * - Quyết định ngưỡng (requiresManagerReapproval) so sánh trên giá trị THÔ bằng số
+ *   nguyên — xem `exceedsManagerThreshold`.
+ * - `variancePct` chỉ được làm tròn 2 chữ số thập phân để LƯU/HIỂN THỊ.
  *
  * @param totalActual - Tổng chi phí thực tế (VNĐ)
  * @param estimatedBudget - Dự toán ban đầu (VNĐ)
@@ -65,25 +99,30 @@ export function calculateVariance(
   }
 
   const varianceAmount = totalActual - estimatedBudget;
-  const variancePct = (varianceAmount / estimatedBudget) * 100;
+  const variancePctRaw = (varianceAmount / estimatedBudget) * 100;
 
-  // Round về 2 decimal places (NUMERIC(6,2) trong PostgreSQL spec)
-  const variancePctRounded = Math.round(variancePct * 100) / 100;
+  // CHỈ làm tròn khi lưu/hiển thị (NUMERIC(6,2) trong PostgreSQL spec) — không dùng để so ngưỡng
+  const variancePct = Math.round(variancePctRaw * 100) / 100;
+
+  const requiresManagerReapproval = exceedsManagerThreshold(totalActual, estimatedBudget);
 
   return {
     totalActual,
     estimatedBudget,
-    variancePct: variancePctRounded,
+    variancePct,
     varianceAmount,
-    requiresJustification:
-      variancePctRounded > 0 && variancePctRounded <= VARIANCE_JUSTIFICATION_THRESHOLD,
-    requiresManagerReapproval:
-      variancePctRounded > VARIANCE_JUSTIFICATION_THRESHOLD,
+    // BR-TR-05: vượt dự toán (mọi mức) ⇒ bắt buộc giải trình; >10% thì Manager lo phần bổ sung
+    requiresJustification: varianceAmount > 0 && !requiresManagerReapproval,
+    requiresManagerReapproval,
   };
 }
 
 /**
- * validateExpenseSubmit — Validate variance trước khi submit expense claim
+ * validateExpenseSubmit — Validate hồ sơ trước khi submit (BR-TR-05).
+ *
+ * Quyết định mới: MỌI mức vượt dự toán (varianceAmount > 0, tính trên giá trị THÔ)
+ * đều bắt buộc giải trình. Vượt >10% KHÔNG chặn submit — hồ sơ được chuyển cho
+ * Manager duyệt bổ sung (trip = MANAGER_REAPPROVE).
  *
  * @returns { valid: true } | { valid: false, error: string }
  */
@@ -91,17 +130,11 @@ export function validateExpenseSubmit(
   variance: VarianceResult,
   justification: string | null
 ): { valid: boolean; error?: string } {
-  if (variance.requiresJustification && !justification?.trim()) {
+  // BR-TR-05: MỌI mức vượt dự toán (variance > 0) đều bắt buộc giải trình
+  if (variance.varianceAmount > 0 && !justification?.trim()) {
     return {
       valid: false,
       error: `Chi phí vượt dự toán ${variance.variancePct.toFixed(1)}%. Vui lòng nhập lý do giải trình.`,
-    };
-  }
-
-  if (variance.requiresManagerReapproval) {
-    return {
-      valid: false,
-      error: `Chi phí vượt dự toán ${variance.variancePct.toFixed(1)}% (> ${VARIANCE_JUSTIFICATION_THRESHOLD}%). Cần Manager phê duyệt bổ sung trước khi nộp.`,
     };
   }
 
@@ -171,13 +204,13 @@ export async function getExpense(tripId: string, userId: string, userRole: strin
 export async function createExpense(tripId: string, userId: string) {
   const trip = await assertExpenseOwner(tripId, userId);
 
-  if (!['APPROVED', 'ONGOING'].includes(trip.status))
-    throw Errors.INVALID_STATUS_TRANSITION(trip.status, 'APPROVED|ONGOING required');
+  if (!['APPROVED', 'ONGOING', 'EXPENSE_DRAFT'].includes(trip.status))
+    throw Errors.INVALID_STATUS_TRANSITION(trip.status, 'APPROVED|ONGOING|EXPENSE_DRAFT required');
 
   const existing = await prisma.expense.findUnique({ where: { tripId } });
   if (existing) throw Errors.INVALID_STATUS_TRANSITION('EXPENSE_EXISTS', 'already created');
 
-  return prisma.expense.create({
+  const expense = await prisma.expense.create({
     data: {
       tripId,
       totalActual:             0,
@@ -185,6 +218,13 @@ export async function createExpense(tripId: string, userId: string) {
       status:                  'DRAFT',
     },
   });
+
+  // Bắt đầu kê khai = kết thúc giai đoạn công tác (workflows.md: ONGOING → EXPENSE_DRAFT)
+  if (trip.status === 'ONGOING') {
+    await prisma.trip.update({ where: { id: tripId }, data: { status: 'EXPENSE_DRAFT' } });
+  }
+
+  return expense;
 }
 
 // ─── updateExpense (justification only) ──────────────────────────────────────
@@ -292,17 +332,30 @@ export async function submitExpense(tripId: string, userId: string, ipAddress?: 
   // Tính variance theo BR-TR-05
   const variance = calculateVariance(expense.totalActual, expense.estimatedBudgetSnapshot);
 
-  // Soft: 0 < variance ≤ 10% → bắt buộc nhập justification
-  if (variance.requiresJustification && !expense.justification?.trim())
+  // BR-TR-05: MỌI mức vượt dự toán (giá trị thô) đều bắt buộc nhập justification
+  // — dùng chung validateExpenseSubmit (một nguồn logic duy nhất)
+  const submitCheck = validateExpenseSubmit(variance, expense.justification);
+  if (!submitCheck.valid)
     throw Errors.VALIDATION_ERROR({
-      fieldErrors: { justification: ['Justification required when variance 0-10%'] },
+      fieldErrors: { justification: [submitCheck.error ?? 'Justification required when actual exceeds budget'] },
       formErrors: [],
     });
 
   const managerReapprovalRequired = variance.requiresManagerReapproval;
 
-  return prisma.$transaction(async (tx) => {
-    const updated = await tx.expense.update({
+  // BR-TR-05 (quyết định mới): vượt >10% trên giá trị THÔ ⇒ submit xong hồ sơ chuyển
+  // THẲNG cho Manager (trip = MANAGER_REAPPROVE) — Finance chưa thấy, chưa thao tác được.
+  // Ngược lại (≤10%): vào thẳng hàng đợi Finance (trip = EXPENSE_SUBMITTED).
+  const nextTripStatus = managerReapprovalRequired ? 'MANAGER_REAPPROVE' : 'EXPENSE_SUBMITTED';
+
+  // ── Phase 1: ghi expense + trip trong CÙNG transaction (atomic) ─────────────
+  // ⚠️ FIX BUG P2028: TUYỆT ĐỐI không gọi logAudit/createNotification bên trong
+  // $transaction — hai hàm đó ghi DB bằng prisma client NGOÀI transaction, mà SQLite
+  // chỉ cho phép 1 writer ⇒ statement bị treo cho tới khi interactive transaction hết
+  // hạn 5000ms ⇒ PrismaClientKnownRequestError P2028 "Transaction already closed" ⇒ HTTP 500.
+  // Side effects vì vậy nằm ở Phase 2 (ngoài transaction) — đúng convention trip.service.ts.
+  const updated = await prisma.$transaction(async (tx) => {
+    const exp = await tx.expense.update({
       where: { tripId },
       data: {
         status:                   'SUBMITTED',
@@ -313,21 +366,46 @@ export async function submitExpense(tripId: string, userId: string, ipAddress?: 
       },
     });
 
-    await tx.trip.update({ where: { id: tripId }, data: { status: 'EXPENSE_SUBMITTED' } });
+    await tx.trip.update({ where: { id: tripId }, data: { status: nextTripStatus } });
 
-    await logAudit({
-      userId,
-      entityType: 'EXPENSE',
-      entityId: expense.id,
-      action: AuditActions.EXPENSE_SUBMITTED,
-      previousState: 'DRAFT',
-      newState: 'SUBMITTED',
-      metadata: { variancePct: variance.variancePct, managerReapprovalRequired },
-      ipAddress: ipAddress ?? null,
+    return exp;
+  });
+
+  // ── Phase 2: Audit + Notification ngoài transaction (tránh timeout) ─────────
+  await logAudit({
+    userId,
+    entityType: 'EXPENSE',
+    entityId: expense.id,
+    action: AuditActions.EXPENSE_SUBMITTED,
+    previousState: 'DRAFT',
+    newState: 'SUBMITTED',
+    metadata: { variancePct: variance.variancePct, managerReapprovalRequired, tripStatus: nextTripStatus },
+    ipAddress: ipAddress ?? null,
+  });
+
+  // BR-TR-05: >10% ⇒ CHỈ Manager được thông báo (Finance không thấy hồ sơ ở bước này)
+  if (managerReapprovalRequired) {
+    if (trip.employee.managerId) {
+      await createNotification({
+        recipientId: trip.employee.managerId,
+        type: 'MANAGER_REAPPROVAL_REQUIRED',
+        message: `Chi phi vuot du toan > 10% (${variance.variancePct.toFixed(2)}%). Can phe duyet bo sung.`,
+        referenceId: expense.id,
+        referenceType: 'EXPENSE',
+      });
+    }
+
+    // Thông báo cho nhân viên: hồ sơ ĐÃ CHUYỂN Manager duyệt bổ sung (không phải bị từ chối)
+    await createNotification({
+      recipientId: trip.employeeId,
+      type: 'EXPENSE_SUBMITTED',
+      message: 'Bao cao chi phi da duoc nop va chuyen Manager phe duyet bo sung (chi phi vuot du toan > 10%).',
+      referenceId: expense.id,
+      referenceType: 'EXPENSE',
     });
-
-    // Notify Finance
-    const financeUsers = await tx.user.findMany({
+  } else {
+    // ≤10%: vào hàng đợi Finance như bình thường
+    const financeUsers = await prisma.user.findMany({
       where: { role: 'FINANCE', isActive: true },
       select: { id: true },
     });
@@ -340,20 +418,9 @@ export async function submitExpense(tripId: string, userId: string, ipAddress?: 
         referenceType: 'EXPENSE',
       });
     }
+  }
 
-    // Notify Manager nếu cần reapproval (variance > 10%)
-    if (managerReapprovalRequired && trip.employee.managerId) {
-      await createNotification({
-        recipientId: trip.employee.managerId,
-        type: 'MANAGER_REAPPROVAL_REQUIRED',
-        message: `Chi phi vuot du toan > 10%. Can phe duyet bo sung.`,
-        referenceId: expense.id,
-        referenceType: 'EXPENSE',
-      });
-    }
-
-    return updated;
-  });
+  return updated;
 }
 
 // ─── approveExpense ───────────────────────────────────────────────────────────
@@ -365,45 +432,51 @@ export async function approveExpense(
 ) {
   const expense = await prisma.expense.findUnique({
     where: { tripId },
-    include: { trip: { select: { employeeId: true } } },
+    include: { trip: { select: { employeeId: true, status: true } } },
   });
   if (!expense) throw Errors.NOT_FOUND('expense');
   if (expense.status !== 'SUBMITTED')
     throw Errors.INVALID_STATUS_TRANSITION(expense.status, 'SUBMITTED');
-  if (expense.managerReapprovalRequired && !expense.managerReapproved)
-    throw Errors.VALIDATION_ERROR({
-      fieldErrors: {},
-      formErrors: ['Manager reapproval required before Finance can approve'],
-    });
+  // BR-TR-05: hồ sơ >10% CHỈ được Finance duyệt SAU khi Manager duyệt bổ sung
+  // (API.md:661 → 422 EXPENSE_VARIANCE_EXCEEDED). Trip MANAGER_REAPPROVE không thuộc hàng đợi Finance.
+  if (
+    expense.trip.status === 'MANAGER_REAPPROVE' ||
+    (expense.managerReapprovalRequired && !expense.managerReapproved)
+  )
+    throw Errors.EXPENSE_VARIANCE_EXCEEDED(expense.variancePct ?? 0);
 
-  return prisma.$transaction(async (tx) => {
-    const updated = await tx.expense.update({
+  // ── Phase 1: ghi expense + trip trong CÙNG transaction (atomic) ─────────────
+  // (FIX P2028) Audit/Notification KHÔNG được gọi trong transaction — xem submitExpense.
+  const updated = await prisma.$transaction(async (tx) => {
+    const exp = await tx.expense.update({
       where: { tripId },
       data: { status: 'APPROVED', approvedAt: new Date() },
     });
     await tx.trip.update({ where: { id: tripId }, data: { status: 'EXPENSE_APPROVED' } });
-
-    await logAudit({
-      userId,
-      entityType: 'EXPENSE',
-      entityId: expense.id,
-      action: AuditActions.EXPENSE_APPROVED,
-      previousState: 'SUBMITTED',
-      newState: 'APPROVED',
-      metadata: { comment },
-      ipAddress: ipAddress ?? null,
-    });
-
-    await createNotification({
-      recipientId: expense.trip.employeeId,
-      type: 'EXPENSE_APPROVED',
-      message: 'Bao cao chi phi cua ban da duoc Finance phe duyet.',
-      referenceId: expense.id,
-      referenceType: 'EXPENSE',
-    });
-
-    return { ...updated, tripStatus: 'EXPENSE_APPROVED' };
+    return exp;
   });
+
+  // ── Phase 2: Audit + Notification ngoài transaction (tránh timeout) ─────────
+  await logAudit({
+    userId,
+    entityType: 'EXPENSE',
+    entityId: expense.id,
+    action: AuditActions.EXPENSE_APPROVED,
+    previousState: 'SUBMITTED',
+    newState: 'APPROVED',
+    metadata: { comment },
+    ipAddress: ipAddress ?? null,
+  });
+
+  await createNotification({
+    recipientId: expense.trip.employeeId,
+    type: 'EXPENSE_APPROVED',
+    message: 'Bao cao chi phi cua ban da duoc Finance phe duyet.',
+    referenceId: expense.id,
+    referenceType: 'EXPENSE',
+  });
+
+  return { ...updated, tripStatus: 'EXPENSE_APPROVED' };
 }
 
 // ─── rejectExpense ────────────────────────────────────────────────────────────
@@ -424,34 +497,41 @@ export async function rejectExpense(
   if (expense.status !== 'SUBMITTED')
     throw Errors.INVALID_STATUS_TRANSITION(expense.status, 'SUBMITTED');
 
-  return prisma.$transaction(async (tx) => {
-    const updated = await tx.expense.update({
+  // ── Phase 1: ghi expense + trip trong CÙNG transaction (atomic) ─────────────
+  // (FIX P2028) Audit/Notification KHÔNG được gọi trong transaction — xem submitExpense.
+  const updated = await prisma.$transaction(async (tx) => {
+    const exp = await tx.expense.update({
       where: { tripId },
       data: { status: 'REJECTED' },
     });
+    // BR-TR-05 (quyết định mới): hồ sơ >10% đã được chuyển THẲNG cho Manager ngay khi submit,
+    // nên Finance KHÔNG còn đường tự route sang Manager. Reject của Finance (kể cả hồ sơ vượt
+    // ngưỡng đã có Manager duyệt bổ sung) giữ nguyên luồng thường → EXPENSE_REJECTED.
     await tx.trip.update({ where: { id: tripId }, data: { status: 'EXPENSE_REJECTED' } });
-
-    await logAudit({
-      userId,
-      entityType: 'EXPENSE',
-      entityId: expense.id,
-      action: AuditActions.EXPENSE_REJECTED,
-      previousState: 'SUBMITTED',
-      newState: 'REJECTED',
-      metadata: { comment },
-      ipAddress: ipAddress ?? null,
-    });
-
-    await createNotification({
-      recipientId: expense.trip.employeeId,
-      type: 'EXPENSE_REJECTED',
-      message: `Bao cao chi phi bi tu choi. Ly do: ${comment.trim()}`,
-      referenceId: expense.id,
-      referenceType: 'EXPENSE',
-    });
-
-    return updated;
+    return exp;
   });
+
+  // ── Phase 2: Audit + Notification ngoài transaction (tránh timeout) ─────────
+  await logAudit({
+    userId,
+    entityType: 'EXPENSE',
+    entityId: expense.id,
+    action: AuditActions.EXPENSE_REJECTED,
+    previousState: 'SUBMITTED',
+    newState: 'REJECTED',
+    metadata: { comment },
+    ipAddress: ipAddress ?? null,
+  });
+
+  await createNotification({
+    recipientId: expense.trip.employeeId,
+    type: 'EXPENSE_REJECTED',
+    message: `Bao cao chi phi bi tu choi. Ly do: ${comment.trim()}`,
+    referenceId: expense.id,
+    referenceType: 'EXPENSE',
+  });
+
+  return updated;
 }
 
 // ─── reapproveExpense ─────────────────────────────────────────────────────────
@@ -468,18 +548,25 @@ export async function reapproveExpense(
       trip: {
         select: {
           employeeId: true,
-          employee: { select: { managerId: true } },
+          status:     true,
+          employee:   { select: { managerId: true } },
         },
       },
     },
   });
   if (!expense) throw Errors.NOT_FOUND('expense');
-  if (expense.status !== 'SUBMITTED')
-    throw Errors.INVALID_STATUS_TRANSITION(expense.status, 'SUBMITTED');
+  // REJECTED: Finance từng chuyển "Gửi Manager duyệt bổ sung" (rejectExpense → MANAGER_REAPPROVE)
+  if (!['SUBMITTED', 'REJECTED'].includes(expense.status))
+    throw Errors.INVALID_STATUS_TRANSITION(expense.status, 'SUBMITTED|REJECTED');
   if (!expense.managerReapprovalRequired) throw Errors.FORBIDDEN();
 
   // Verify: chỉ manager của employee mới được reapprove
   if (expense.trip.employee.managerId !== userId) throw Errors.FORBIDDEN();
+
+  // BR-TR-05 (quyết định mới): duyệt bổ sung chỉ hợp lệ khi hồ sơ ĐANG chờ Manager
+  // (trip = MANAGER_REAPPROVE). Chỉ áp dụng cho nhánh APPROVED — nhánh REJECTED giữ nguyên.
+  if (action === 'APPROVED' && expense.trip.status !== 'MANAGER_REAPPROVE')
+    throw Errors.INVALID_STATUS_TRANSITION(expense.trip.status, 'MANAGER_REAPPROVE');
 
   if (action === 'REJECTED' && !comment?.trim())
     throw Errors.VALIDATION_ERROR({
@@ -498,9 +585,15 @@ export async function reapproveExpense(
     ipAddress: ipAddress ?? null,
   });
 
+  if (action === 'APPROVED') {
+    // Quay về hàng đợi Finance (architecture.md: MANAGER_REAPPROVE → EXPENSE_SUBMITTED)
+    await prisma.trip.update({ where: { id: tripId }, data: { status: 'EXPENSE_SUBMITTED' } });
+  }
+
   return prisma.expense.update({
     where: { tripId },
     data: {
+      ...(action === 'APPROVED' && { status: 'SUBMITTED' }),
       managerReapproved:   action === 'APPROVED',
       managerReapproverId: userId,
       managerReapprovedAt: new Date(),

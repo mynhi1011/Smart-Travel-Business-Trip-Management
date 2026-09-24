@@ -36,6 +36,14 @@ export interface CreateNotificationInput {
 /**
  * createNotification — Lưu notification vào DB và emit SSE
  * TODO: Implement SSE emit sau khi có lib/sse-emitter.ts
+ *
+ * ⚠️ INVARIANT (bug P2028 — đã từng gây HTTP 500 ở submit expense):
+ *   KHÔNG gọi createNotification bên trong prisma.$transaction(async (tx) => ...).
+ *   Hàm này ghi bằng prisma client NGOÀI transaction; SQLite chỉ cho phép 1 writer nên
+ *   statement sẽ bị treo tới khi interactive transaction hết hạn 5000ms ⇒
+ *   PrismaClientKnownRequestError P2028 "Transaction already closed" ⇒ 500.
+ *   Cách đúng: gọi sau khi transaction đã commit ("Phase 2" — xem expense.service.submitExpense,
+ *   trip.service.submitTrip/approveTrip/rejectTrip/closeTrip).
  */
 export async function createNotification(
   input: CreateNotificationInput

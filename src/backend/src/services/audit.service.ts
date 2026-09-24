@@ -25,6 +25,8 @@ export const AuditActions = {
   ADMIN_APPROVED: 'ADMIN_APPROVED',
   ADMIN_REJECTED: 'ADMIN_REJECTED',
   TRIP_CLOSED: 'TRIP_CLOSED',
+  TRIP_STARTED: 'TRIP_STARTED',
+  TRIP_ENDED: 'TRIP_ENDED',
 
   // Expense lifecycle
   EXPENSE_CREATED: 'EXPENSE_CREATED',
@@ -59,6 +61,14 @@ export interface AuditLogInput {
 /**
  * logAudit — INSERT một bản ghi vào audit_logs (không bao giờ UPDATE/DELETE)
  * Fail-safe: lỗi audit không nên làm crash operation chính
+ *
+ * ⚠️ INVARIANT (bug P2028 — đã từng gây HTTP 500 ở submit expense):
+ *   KHÔNG gọi logAudit bên trong prisma.$transaction(async (tx) => ...).
+ *   Hàm này ghi bằng prisma client NGOÀI transaction; SQLite chỉ cho phép 1 writer nên
+ *   statement sẽ bị treo tới khi interactive transaction hết hạn 5000ms ⇒
+ *   PrismaClientKnownRequestError P2028 "Transaction already closed" ⇒ 500.
+ *   Cách đúng: gọi sau khi transaction đã commit ("Phase 2" — xem expense.service.submitExpense,
+ *   trip.service.submitTrip/approveTrip/rejectTrip/closeTrip).
  */
 export async function logAudit(input: AuditLogInput): Promise<void> {
   try {

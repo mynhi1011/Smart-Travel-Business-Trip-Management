@@ -39,7 +39,9 @@ export async function getDashboard(req: Request, res: Response, next: NextFuncti
     }
 
     if (role === 'FINANCE') {
-      const pendingExpenses = await prisma.expense.findMany({ where: { status: 'SUBMITTED' }, include: { trip: { select: { destination: true, employee: { select: { name: true } } } } }, take: 10 });
+      // BR-TR-05: chỉ đếm hồ sơ ĐÃ có Manager duyệt bổ sung (trip EXPENSE_SUBMITTED).
+      // Hồ sơ vượt >10% đang chờ Manager (trip MANAGER_REAPPROVE) KHÔNG thuộc hàng đợi Finance.
+      const pendingExpenses = await prisma.expense.findMany({ where: { status: 'SUBMITTED', trip: { status: 'EXPENSE_SUBMITTED' } }, include: { trip: { select: { destination: true, employee: { select: { name: true } } } } }, take: 10 });
       const pendingClose = await prisma.trip.findMany({ where: { status: 'EXPENSE_APPROVED' }, include: { employee: { select: { name: true } } }, take: 10 });
       res.json({ role, pendingExpenses: { count: pendingExpenses.length, expenses: pendingExpenses }, pendingClose: { count: pendingClose.length, trips: pendingClose }, notifications: { unreadCount } });
       return;

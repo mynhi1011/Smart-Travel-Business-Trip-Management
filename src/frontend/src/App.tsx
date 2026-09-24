@@ -1,7 +1,7 @@
 ﻿import { useState, useRef, useEffect } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { ApiError, authApi, getAccessToken, type BackendUser } from "./services/api";
-import { listTrips, createTrip, updateTrip, submitTrip, approveTrip, rejectTrip, closeTrip, type BackendTrip } from "./services/trips";
+import { listTrips, createTrip, updateTrip, submitTrip, approveTrip, rejectTrip, closeTrip, startTrip, endTrip, type BackendTrip } from "./services/trips";
 import { generateItinerary as generateAiItinerary, type AiItineraryItem } from "./services/ai";
 import {
   listNotifications as apiListNotifications,
@@ -19,7 +19,7 @@ import {
   type BackendItineraryItem, type ItineraryItemInput, type ItineraryCategory, type ItineraryTimeSlot,
 } from "./services/itinerary";
 import {
-  getExpense, createExpense, addExpenseItem,
+  getExpense, createExpense, addExpenseItem, updateExpenseJustification,
   submitExpense, approveExpense, rejectExpense, reapproveExpense,
   type BackendExpense, type ExpenseCategory,
 } from "./services/expenses";
@@ -41,6 +41,7 @@ type TripStatus =
   | "PENDING_ADMIN_APPROVAL"
   | "APPROVED" | "REJECTED"
   | "TRIP_IN_PROGRESS"
+  | "EXPENSE_DRAFT"
   | "EXPENSE_SUBMITTED"
   | "PENDING_MANAGER_ADDITIONAL_APPROVAL"
   | "EXPENSE_APPROVED"   // BUG-03: Finance approve expense xong nhưng trip chưa CLOSED
@@ -65,6 +66,7 @@ type Trip = {
   managerApproved?: boolean; adminApproved?: boolean;
   managerAdditionalApproval?: boolean;
   urgent?: boolean; urgentReason?: string;
+  requiresLevel2?: boolean;   // từ BE — quyết định số cấp duyệt (BR-TR-04)
 };
 
 type Notification = {
@@ -95,7 +97,7 @@ const EXPENSE_CATEGORIES = [
   { key: "other",     label: "Chi phí khác"},
 ];
 
-const MAJOR_CITIES = ["hà nội", "tp.hcm", "hcm", "hồ chí minh", "tp. hồ chí minh", "thành phố hồ chí minh", "sài gòn", "đà nẵng", "hải phòng", "cần thơ"];
+const MAJOR_CITIES = ["hà nội", "tp.hcm", "hcm", "hồ chí minh", "tp. hồ chí minh", "thành phố hồ chí minh", "sài gòn", "đà nẵng"];
 
 const VIETNAM_PROVINCES = [
   "An Giang", "Bà Rịa - Vũng Tàu", "Bắc Giang", "Bắc Kạn", "Bạc Liêu", "Bắc Ninh", "Bến Tre", "Bình Định",
@@ -247,7 +249,7 @@ function toFrontendTrip(trip: BackendTrip): Trip {
     PENDING_ADMIN_APPROVAL:   "PENDING_ADMIN_APPROVAL",
     APPROVED:                 "APPROVED",
     ONGOING:                  "TRIP_IN_PROGRESS",
-    EXPENSE_DRAFT:            "TRIP_IN_PROGRESS",
+    EXPENSE_DRAFT:            "EXPENSE_DRAFT",   // tách riêng với ONGOING — "Chờ khai chi phí"
     EXPENSE_SUBMITTED:        "EXPENSE_SUBMITTED",
     EXPENSE_APPROVED:         "EXPENSE_APPROVED",  // BUG-03: trạng thái riêng, chưa phải CLOSED
     EXPENSE_REJECTED:         "EXPENSE_SUBMITTED", // bị reject → employee sửa lại
@@ -266,6 +268,7 @@ function toFrontendTrip(trip: BackendTrip): Trip {
       level: v.severity === "BLOCKER" ? "error" : "warning",
       code: v.code, message: v.detail,
     })),
+    requiresLevel2: trip.requiresLevel2,
   };
 }
 
@@ -325,13 +328,11 @@ function countWorkingDays(from: Date, to: Date): number {
   return count;
 }
 
-function checkPolicy(budget: number, departDate: string, to: string, days: number, hotelPerNight = 0, employeeTitle = ""): PolicyViolation[] {
+function checkPolicy(budget: number, departDate: string, to: string, days: number, hotelPerNight = 0, employeeTitle = "", perDiemBudget = 0): PolicyViolation[] {
   const v: PolicyViolation[] = [];
 
   if (budget > 20_000_000) {
     v.push({ level: "error", code: "OVER_20M", message: `Ngân sách ${budget.toLocaleString("vi-VN")}đ vượt ngưỡng 20,000,000đ — bắt buộc phê duyệt Travel Admin` });
-  } else if (budget > 15_000_000) {
-    v.push({ level: "warning", code: "HIGH_BUDGET", message: "Ngân sách cao (>15,000,000đ) — vui lòng tối ưu trước khi nộp" });
   }
 
   if (hotelPerNight > 0) {
@@ -343,10 +344,12 @@ function checkPolicy(budget: number, departDate: string, to: string, days: numbe
 
   if (days > 0 && to) {
     const maxPerDiem = days * perDiemRate(to);
-    // BUG-13 fix: BR-TR-02 "không cho phép vượt" → BLOCKER khi có perDiem input vượt hạn mức
-    // Ở đây chỉ hiển thị info note vì frontend không biết perDiemBudget riêng của user
-    // Policy check thực sự (BLOCKER) chạy ở server khi submit
+    // BUG-13 fix: BR-TR-02 — note hiển thị hạn mức; nếu perDiemBudget vượt Max_Per_Diem
+    // thì push POLICY_VIOLATION_PER_DIEM_EXCEEDED (WARNING vàng — không chặn create/submit, D-10)
     v.push({ level: "warning", code: "PER_DIEM_NOTE", message: `Hạn mức phụ cấp công tác tối đa: ${maxPerDiem.toLocaleString("vi-VN")}đ (${days} ngày × ${perDiemRate(to).toLocaleString("vi-VN")}đ/ngày) — BR-TR-02` });
+    if (perDiemBudget > maxPerDiem) {
+      v.push({ level: "warning", code: "POLICY_VIOLATION_PER_DIEM_EXCEEDED", message: `Phụ cấp công tác ${perDiemBudget.toLocaleString("vi-VN")}đ vượt hạn mức ${maxPerDiem.toLocaleString("vi-VN")}đ (${days} ngày × ${perDiemRate(to).toLocaleString("vi-VN")}đ/ngày) — BR-TR-02. Vui lòng kiểm tra lại.` });
+    }
   }
 
   if (departDate) {
@@ -356,8 +359,6 @@ function checkPolicy(budget: number, departDate: string, to: string, days: numbe
       const workingDaysLeft = countWorkingDays(new Date(), dept);
       if (workingDaysLeft >= 0 && workingDaysLeft < 3) {
         v.push({ level: "error", code: "LATE_SUBMISSION", message: `Nộp muộn — còn ${workingDaysLeft} ngày làm việc trước khởi hành (tối thiểu 3 ngày làm việc). Đánh dấu là Chuyến đi khẩn cấp và nhập lý do.` });
-      } else if (workingDaysLeft >= 3 && workingDaysLeft < 5) {
-        v.push({ level: "warning", code: "SHORT_NOTICE", message: `Thời gian nộp khá sát (${workingDaysLeft} ngày làm việc) — khuyến nghị nộp trước 5 ngày làm việc` });
       }
     }
   }
@@ -365,25 +366,29 @@ function checkPolicy(budget: number, departDate: string, to: string, days: numbe
   return v;
 }
 
-/**
- * BUG-15 fix: đồng bộ với backend routeApproval() trong approval.service.ts
- * Backend: violations.length > 0 → PENDING_ADMIN_APPROVAL (không lọc gì cả)
- * Frontend cũ: lọc bỏ LATE_SUBMISSION — không match backend
- *
- * Quyết định: giữ lọc LATE_SUBMISSION vì:
- * - LATE_SUBMISSION / URGENT_TRIP_NOTICE → severity WARNING (không phải BLOCKER)
- * - Backend policyCheckResult.violations chứa tất cả violations
- * - Frontend map: severity BLOCKER → "error", WARNING → "warning"
- * - Nếu chỉ có LATE_SUBMISSION (warning), backend vẫn route → PENDING_ADMIN_APPROVAL
- *   vì requiresLevel2 = violations.length > 0
- * → Sửa để dùng policyViolations từ backend (đã được server tính), ưu tiên budget check
- */
-function needsAdminApproval(trip: Trip): boolean {
-  // Budget > 20M luôn cần Admin (BR-TR-04)
-  if (trip.budget > 20_000_000) return true;
-  // Có bất kỳ violation nào (từ server) → cần Admin, đúng với backend routeApproval()
-  if (trip.policyViolations && trip.policyViolations.length > 0) return true;
-  return false;
+/** Lý do cần cấp 2 — map từ mã violation BE trả về (không tự tính lại ở FE). */
+function level2Reasons(violations?: ReadonlyArray<{ code: string }> | null): string[] {
+  const reasons = new Set<string>();
+  for (const v of violations ?? []) {
+    if (v.code === "POLICY_VIOLATION_BUDGET_THRESHOLD") reasons.add("Ngân sách > 20 triệu");
+    else if (v.code === "POLICY_VIOLATION_PER_DIEM_EXCEEDED") reasons.add("Vượt hạn mức per diem");
+    else if (v.code === "URGENT_TRIP_NOTICE") reasons.add("Nộp gấp < 3 ngày làm việc");
+  }
+  return [...reasons];
+}
+
+/** Hiển thị số cấp duyệt theo dữ liệu BE trả về (BR-TR-04). */
+function ApprovalLevelsBox({ requiresLevel2, reasons }: { requiresLevel2: boolean; reasons: string[] }) {
+  return (
+    <div className="px-3.5 py-2.5 rounded-lg border border-blue-200 bg-blue-50 text-xs text-blue-700 flex flex-col gap-1" data-testid="approval-levels">
+      <p>
+        <span className="font-semibold">Cần duyệt {requiresLevel2 ? 2 : 1} cấp</span>
+        {" — Cấp 1: Manager"}
+        {requiresLevel2 && " → Cấp 2: Travel Admin (Director)"}
+      </p>
+      {requiresLevel2 && reasons.length > 0 && <p>Lý do: {reasons.join("; ")}</p>}
+    </div>
+  );
 }
 
 // PolicyBanner được import từ ./components/PolicyBanner
@@ -405,9 +410,10 @@ const STATUS_LABEL: Record<TripStatus, string> = {
   PENDING_ADMIN_APPROVAL:              "Chờ duyệt cấp 2",
   APPROVED:                            "Đã duyệt",
   TRIP_IN_PROGRESS:                    "Đang thực hiện",
+  EXPENSE_DRAFT:                       "Chờ khai chi phí",
   REJECTED:                            "Từ chối",
   EXPENSE_SUBMITTED:                   "Đang quyết toán",
-  PENDING_MANAGER_ADDITIONAL_APPROVAL: "Chờ Manager bổ sung",
+  PENDING_MANAGER_ADDITIONAL_APPROVAL: "Chờ Manager duyệt bổ sung",
   EXPENSE_APPROVED:                    "Finance đã duyệt — chờ đóng hồ sơ",
   CLOSED:                              "Đã đóng hồ sơ",
 };
@@ -419,6 +425,7 @@ const STATUS_STYLE: Record<TripStatus, string> = {
   PENDING_ADMIN_APPROVAL:              "bg-blue-100 text-blue-700 border border-blue-200",
   APPROVED:                            "bg-emerald-100 text-emerald-700 border border-emerald-200",
   TRIP_IN_PROGRESS:                    "bg-cyan-100 text-cyan-700 border border-cyan-200",
+  EXPENSE_DRAFT:                       "bg-cyan-100 text-cyan-700 border border-cyan-200",
   REJECTED:                            "bg-red-100 text-red-600 border border-red-200",
   EXPENSE_SUBMITTED:                   "bg-purple-100 text-purple-700 border border-purple-200",
   PENDING_MANAGER_ADDITIONAL_APPROVAL: "bg-orange-100 text-orange-700 border border-orange-200",
@@ -821,6 +828,7 @@ function ExpenseItemForm({ tripId, onAdded }: { tripId: string; onAdded: () => P
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const [form, setForm] = useState({ expenseDate: "", category: "OTHER" as ExpenseCategory, amount: "", description: "" });
+  const [receiptName, setReceiptName] = useState("");
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
@@ -835,9 +843,11 @@ function ExpenseItemForm({ tripId, onAdded }: { tripId: string; onAdded: () => P
         category: form.category,
         amount: Number(form.amount),
         description: form.description.trim(),
+        ...(receiptName ? { receiptUrl: receiptName } : {}),
       });
       await onAdded();
       setForm({ expenseDate: "", category: "OTHER", amount: "", description: "" });
+      setReceiptName("");
       setOpen(false);
     } catch (error) {
       setErr(error instanceof Error ? error.message : "Lỗi thêm khoản chi.");
@@ -886,6 +896,11 @@ function ExpenseItemForm({ tripId, onAdded }: { tripId: string; onAdded: () => P
           <FieldLabel>Mô tả <span className="text-red-400">*</span></FieldLabel>
           <TextInput value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Tên khoản chi..." />
         </div>
+      </div>
+      <div>
+        <FieldLabel>Đính kèm biên nhận (mock)</FieldLabel>
+        <input type="file" accept="image/*,.pdf" onChange={e => setReceiptName(e.target.files?.[0]?.name ?? "")} className="w-full text-xs text-gray-500 file:mr-3 file:px-3 file:py-1.5 file:border-0 file:rounded-lg file:bg-emerald-50 file:text-emerald-700 file:text-xs file:font-semibold hover:file:bg-emerald-100" />
+        {receiptName && <p className="text-xs text-emerald-700 mt-1">📎 {receiptName}</p>}
       </div>
       {err && <p className="text-xs text-red-500">{err}</p>}
       <div className="flex gap-2">
@@ -1057,6 +1072,89 @@ function ApprovalItineraryPreview({ tripId }: { tripId: string }) {
   );
 }
 
+// ─── BR-TR-05 helpers — dùng chung cho mọi màn hình expense ───────────────────
+/** Ngưỡng vượt dự toán cần Manager duyệt bổ sung (%) — khớp BE VARIANCE_JUSTIFICATION_THRESHOLD */
+const VARIANCE_MANAGER_THRESHOLD = 10;
+
+/**
+ * exceedsManagerThresholdFE — bản sao CHÍNH XÁC công thức so ngưỡng của BE
+ * (số nguyên trên giá trị thô: actual*100 > budget*110, không dùng % đã làm tròn).
+ * Chỉ dùng để XEM TRƯỚC trước khi submit; sau khi hồ sơ đã submit LUÔN dùng cờ
+ * `managerReapprovalRequired` do BE trả về.
+ */
+function exceedsManagerThresholdFE(totalActual: number, estimatedBudget: number): boolean {
+  const actualHundredths = Math.round(totalActual * 100);
+  const budgetHundredths = Math.round(estimatedBudget * 100);
+  if (budgetHundredths <= 0) return actualHundredths > 0;
+  return actualHundredths * 100 > budgetHundredths * (100 + VARIANCE_MANAGER_THRESHOLD);
+}
+
+/** % chênh lệch để hiển thị (2 chữ số thập phân) — ưu tiên giá trị BE đã tính. */
+function variancePctText(pct: number | null | undefined, fallbackRawPct: number): string {
+  const value = pct ?? fallbackRawPct;
+  return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+/**
+ * ExpenseReviewPanel — hiển thị dự toán / thực tế / chênh lệch (số tiền + %) và
+ * GIẢI TRÌNH của nhân viên cho Manager (duyệt bổ sung) và Finance đọc (BR-TR-05).
+ * Tự lấy dữ liệu qua getExpense(tripId) nên dùng được ở mọi màn hình duyệt.
+ */
+function ExpenseReviewPanel({ tripId }: { tripId: string }) {
+  const [expense, setExpense] = useState<BackendExpense | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    getExpense(tripId).then(setExpense).catch(() => setExpense(null)).finally(() => setLoading(false));
+  }, [tripId]);
+
+  if (loading) return <p className="text-xs text-gray-400">Đang tải chi phí...</p>;
+  if (!expense) return <p className="text-xs text-gray-400">Chưa có báo cáo chi phí.</p>;
+
+  const estimated = expense.estimatedBudgetSnapshot;
+  const actual    = expense.totalActual;
+  const diff      = actual - estimated;
+  const rawPct    = estimated > 0 ? (diff / estimated) * 100 : 0;
+  const pctText   = variancePctText(expense.variancePct, rawPct);
+  const catLabel  = (key: string) => EXPENSE_CATEGORIES.find(c => c.key === key)?.label || key;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="bg-gray-50 border border-gray-100 rounded-lg p-3 flex flex-col gap-2 text-sm">
+        {[
+          ["Dự toán",    `${estimated.toLocaleString("vi-VN")}đ`],
+          ["Thực tế",    `${actual.toLocaleString("vi-VN")}đ`],
+          ["Chênh lệch", `${diff > 0 ? "+" : ""}${diff.toLocaleString("vi-VN")}đ (${pctText})`],
+        ].map(([k, v]) => (
+          <div key={k} className="flex justify-between gap-4">
+            <span className="text-gray-400">{k}</span>
+            <span className={`font-medium text-right ${k === "Chênh lệch" && expense.managerReapprovalRequired ? "text-red-500 font-bold" : "text-[#1b2f35]"}`}>{v}</span>
+          </div>
+        ))}
+      </div>
+      <div>
+        <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-1">Giải trình của nhân viên</p>
+        <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+          {expense.justification?.trim() || "— Chưa có giải trình —"}
+        </p>
+      </div>
+      <div>
+        <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-1">Các khoản chi ({expense.items.length})</p>
+        <div className="flex flex-col gap-1.5">
+          {expense.items.map(i => (
+            <div key={i.id} className="flex justify-between gap-4 text-xs">
+              <span className="text-gray-600">{catLabel(i.category)} · {i.description}</span>
+              <span className="font-medium text-[#1b2f35] shrink-0">{i.amount.toLocaleString("vi-VN")}đ</span>
+            </div>
+          ))}
+          {expense.items.length === 0 && <p className="text-xs text-gray-400">Chưa có khoản chi nào.</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function VarianceTable({ items }: { items: ExpenseItem[] }) {
   const totalBudget = items.reduce((s, i) => s + i.budgeted, 0);
   const totalActual = items.reduce((s, i) => s + i.actual,   0);
@@ -1149,8 +1247,9 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                 { key: "PENDING_ADMIN_APPROVAL",               label: "Chờ duyệt cấp 2",   color: "blue"    },
                 { key: "APPROVED",                             label: "Đã duyệt",           color: "emerald" },
                 { key: "TRIP_IN_PROGRESS",                     label: "Đang thực hiện",     color: "cyan"    },
+                { key: "EXPENSE_DRAFT",                        label: "Chờ khai chi phí",   color: "cyan"    },
                 { key: "EXPENSE_SUBMITTED",                    label: "Đang quyết toán",    color: "purple"  },
-                { key: "PENDING_MANAGER_ADDITIONAL_APPROVAL",  label: "Chờ Manager",        color: "orange"  },
+                { key: "PENDING_MANAGER_ADDITIONAL_APPROVAL",  label: "Chờ Manager duyệt", color: "orange"  },
                 { key: "EXPENSE_APPROVED",                     label: "Chờ đóng hồ sơ",    color: "indigo"  },
                 { key: "CLOSED",                               label: "Đã đóng",            color: "slate"   },
                 { key: "REJECTED",                             label: "Từ chối",            color: "red"     },
@@ -1229,10 +1328,16 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                   {trip.status === "APPROVED" && (
                     <>
                       <button onClick={() => { setSelected(trip); setScreen("itinerary"); }} className="text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors">Lịch trình</button>
-                      <button onClick={() => void reload()} className="text-sm font-medium text-cyan-700 border border-cyan-200 hover:bg-cyan-50 px-3 py-1.5 rounded-lg transition-colors">Bắt đầu chuyến đi</button>
+                      <button onClick={() => { void (async () => { try { await startTrip(trip.id); await reload(); } catch (err) { alert(err instanceof Error ? err.message : "Không thể bắt đầu chuyến đi."); } })(); }} className="text-sm font-medium text-cyan-700 border border-cyan-200 hover:bg-cyan-50 px-3 py-1.5 rounded-lg transition-colors">Bắt đầu chuyến đi</button>
                     </>
                   )}
                   {trip.status === "TRIP_IN_PROGRESS" && (
+                    <>
+                      <button onClick={() => { setSelected(trip); setScreen("itinerary"); }} className="text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors">Lịch trình</button>
+                      <button onClick={() => { void (async () => { try { await endTrip(trip.id); await reload(); } catch (err) { alert(err instanceof Error ? err.message : "Không thể kết thúc chuyến đi."); } })(); }} className="text-sm font-medium text-cyan-700 border border-cyan-200 hover:bg-cyan-50 px-3 py-1.5 rounded-lg transition-colors">Kết thúc chuyến đi</button>
+                    </>
+                  )}
+                  {trip.status === "EXPENSE_DRAFT" && (
                     <>
                       <button onClick={() => { setSelected(trip); setScreen("itinerary"); }} className="text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors">Lịch trình</button>
                       <button onClick={() => { setSelected(trip); setScreen("expense"); }} className="text-sm font-medium text-purple-700 border border-purple-200 hover:bg-purple-50 px-3 py-1.5 rounded-lg transition-colors">Khai chi phí</button>
@@ -1264,7 +1369,8 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
   const [aiError, setAiError] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [form, setForm] = useState({ from: "", to: "", departDate: "", returnDate: "", purpose: "", budget: "", urgent: false, urgentReason: "" });
+  const [submitResult, setSubmitResult] = useState<{ requiresLevel2: boolean; reasons: string[] } | null>(null);
+  const [form, setForm] = useState({ from: "", to: "", departDate: "", returnDate: "", purpose: "", budget: "", perDiemBudget: "", urgent: false, urgentReason: "" });
   const [errs, setErrs] = useState<Record<string, string>>({});
   const set = (f: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setForm(v => ({ ...v, [f]: e.target.value }));
@@ -1274,8 +1380,8 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
   const budget = Number(form.budget) || 0;
   const deptD  = parseDMY(form.departDate);
   const retD   = parseDMY(form.returnDate);
-  const tripDays = deptD && retD && retD > deptD ? Math.ceil((retD.getTime() - deptD.getTime()) / 86_400_000) : 0;
-  const violations = checkPolicy(budget, form.departDate, form.to, tripDays, 0, user.title);
+  const tripDays = deptD && retD && retD > deptD ? Math.ceil((retD.getTime() - deptD.getTime()) / 86_400_000) + 1 : 0;
+  const violations = checkPolicy(budget, form.departDate, form.to, tripDays, 0, user.title, Number(form.perDiemBudget) || 0);
   const isLateSubmission = violations.some(v => v.code === "LATE_SUBMISSION");
 
   function validateStep0(): boolean {
@@ -1347,6 +1453,9 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
         returnDate:       form.returnDate  ? `${yyyy2}-${mm2}-${dd2}` : "2099-01-02",
         purpose:          form.purpose.trim() || "Đang soạn thảo — chưa hoàn chỉnh",
         estimatedBudget:  Number(form.budget.replace(/[^0-9]/g, "")) || 1,
+        ...(form.perDiemBudget.trim()
+          ? { perDiemBudget: Number(form.perDiemBudget.replace(/[^0-9]/g, "")) || 0 }
+          : {}),
         ...(form.urgent || isLateSubmission
           ? { urgencyReason: form.urgentReason.trim() || undefined }
           : {}),
@@ -1389,14 +1498,19 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
           returnDate: `${yyyy2}-${mm2}-${dd2}`,
           purpose: form.purpose,
           estimatedBudget: budget,
+          ...(form.perDiemBudget.trim()
+            ? { perDiemBudget: Number(form.perDiemBudget.replace(/[^0-9]/g, "")) || 0 }
+            : {}),
           ...(form.urgent || isLateSubmission
             ? { urgencyReason: form.urgentReason || undefined }
             : {}),
         });
         tripId = created.id;
       }
-      await submitTrip(tripId);
-      onSuccess();
+      const result = await submitTrip(tripId);
+      // Số cấp do BE trả về (không tự tính lại ở FE) — hiển thị trước khi quay dashboard
+      setSubmitResult({ requiresLevel2: result.requiresLevel2, reasons: level2Reasons(result.policyCheckResult?.violations) });
+      setTimeout(onSuccess, 1800);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Không thể tạo yêu cầu.");
     }
@@ -1486,6 +1600,11 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
                 {budget > 0 && <p className="text-xs text-gray-400 mt-1">{budget.toLocaleString("vi-VN")} đồng</p>}
                 {fieldErr("budget")}
               </div>
+              <div>
+                <FieldLabel>Mức công tác phí dự kiến (ăn uống, đi lại nội địa) (VNĐ)</FieldLabel>
+                <input type="number" min={0} value={form.perDiemBudget} onChange={set("perDiemBudget")} placeholder="Ví dụ: 1200000" className={inputCls("perDiemBudget")} />
+                {Number(form.perDiemBudget) > 0 && <p className="text-xs text-gray-400 mt-1">{Number(form.perDiemBudget).toLocaleString("vi-VN")} đồng</p>}
+              </div>
               {isLateSubmission && (
                 <div className="flex flex-col gap-2 p-3.5 rounded-lg border border-red-200 bg-red-50">
                   <p className="text-xs font-semibold text-red-700">Chuyến đi dưới 3 ngày làm việc — bắt buộc đánh dấu khẩn cấp và nhập lý do (BR-TR-03).</p>
@@ -1538,6 +1657,9 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
                           returnDate: `${yyyy2}-${mm2}-${dd2}`,
                           purpose: form.purpose,
                           estimatedBudget: budget,
+                          ...(form.perDiemBudget.trim()
+                            ? { perDiemBudget: Number(form.perDiemBudget.replace(/[^0-9]/g, "")) || 0 }
+                            : {}),
                           ...(form.urgent || isLateSubmission
                             ? { urgencyReason: form.urgentReason || undefined }
                             : {}),
@@ -1594,6 +1716,9 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
               <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-4">Xem lại trước khi gửi</p>
               {violations.filter(v => v.code !== "PER_DIEM_NOTE").length > 0 && (
                 <PolicyBanner violations={violations.filter(v => v.code !== "PER_DIEM_NOTE")} />
+              )}
+              {submitResult && (
+                <div className="mb-3"><ApprovalLevelsBox requiresLevel2={submitResult.requiresLevel2} reasons={submitResult.reasons} /></div>
               )}
               <div className="bg-gray-50 border border-gray-100 rounded-lg p-4 text-sm flex flex-col gap-2.5 mb-4">
                 {[ ["Điểm đi", form.from], ["Điểm đến", form.to], ["Ngày đi", form.departDate], ["Ngày về", form.returnDate], ["Số ngày", `${tripDays} ngày`], ["Mục đích", form.purpose] ].map(([k, v]) => (
@@ -1736,8 +1861,8 @@ function EmpStatus({ user, onLogout, trip, onBack }: { user: User; onLogout: () 
   const flow = [
     { label: "Đã nộp", desc: `Nộp lúc ${trip.submittedAt}`, done: true },
     { label: "Duyệt cấp 1 (Manager)", desc: trip.managerNote || "Chờ Manager phê duyệt", done: !!trip.managerApproved, rejected: trip.status === "REJECTED" && !trip.adminApproved },
-    { label: "Duyệt cấp 2 (Admin)", desc: trip.adminNote || (needsAdminApproval(trip) ? "Cần phê duyệt cấp 2" : "Không bắt buộc"), done: !!trip.adminApproved, skipped: trip.status === "APPROVED" && !needsAdminApproval(trip) },
-    { label: "Đã duyệt", desc: ["APPROVED","TRIP_IN_PROGRESS"].includes(trip.status) ? "Chuyến đi được phê duyệt" : "Chờ hoàn tất phê duyệt", done: ["APPROVED","TRIP_IN_PROGRESS","EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","EXPENSE_APPROVED","CLOSED"].includes(trip.status) },
+    { label: "Duyệt cấp 2 (Admin)", desc: trip.adminNote || ((trip.requiresLevel2 ?? false) ? "Cần phê duyệt cấp 2" : "Không bắt buộc"), done: !!trip.adminApproved, skipped: trip.status === "APPROVED" && !(trip.requiresLevel2 ?? false) },
+    { label: "Đã duyệt", desc: ["APPROVED","TRIP_IN_PROGRESS","EXPENSE_DRAFT"].includes(trip.status) ? "Chuyến đi được phê duyệt" : "Chờ hoàn tất phê duyệt", done: ["APPROVED","TRIP_IN_PROGRESS","EXPENSE_DRAFT","EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","EXPENSE_APPROVED","CLOSED"].includes(trip.status) },
     { label: "Quyết toán chi phí", desc: ["EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","EXPENSE_APPROVED","CLOSED"].includes(trip.status) ? "Đã nộp báo cáo chi phí" : "Sau chuyến đi nộp chi phí thực tế", done: ["EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","EXPENSE_APPROVED","CLOSED"].includes(trip.status) },
     { label: "Đóng hồ sơ", desc: trip.financeNote || "Finance xem xét và đóng hồ sơ", done: trip.status === "CLOSED" },
   ];
@@ -1749,6 +1874,7 @@ function EmpStatus({ user, onLogout, trip, onBack }: { user: User; onLogout: () 
         <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Về Dashboard</button></div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           <Card className="p-6 lg:col-span-2">
+            <div className="mb-4"><ApprovalLevelsBox requiresLevel2={trip.requiresLevel2 ?? false} reasons={level2Reasons(trip.policyViolations)} /></div>
             <div className="flex flex-col gap-0">
               {flow.map((s, i) => (
                 <div key={s.label} className="flex gap-4">
@@ -1794,12 +1920,14 @@ function EmpExpense({ user, onLogout, trip, onBack, onSave }: {
   const [expLoading, setExpLoading] = useState(true);
   const [saveErr, setSaveErr] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [justification, setJustification] = useState("");
 
   // Reload expense from server
   const reloadExpense = async () => {
     try {
       const data = await getExpense(trip.id);
       setExpense(data);
+      setJustification(prev => prev || (data.justification ?? ""));
     } catch {
       // No expense yet — that's fine for APPROVED/TRIP_IN_PROGRESS
       setExpense(null);
@@ -1825,20 +1953,36 @@ function EmpExpense({ user, onLogout, trip, onBack, onSave }: {
   const totalActual = expense?.totalActual ?? 0;
   const totalBudgeted = expense?.estimatedBudgetSnapshot ?? trip.budget;
   const diff = totalActual - totalBudgeted;
+  // BR-TR-05: overPct chỉ để HIỂN THỊ — quyết định ngưỡng dùng công thức thô giống BE
   const overPct = totalBudgeted > 0 ? (diff / totalBudgeted) * 100 : 0;
+  const willRequireManager = exceedsManagerThresholdFE(totalActual, totalBudgeted);
 
   async function handleSave() {
     setSaveErr("");
     setSubmitting(true);
     try {
+      // BR-TR-05: MỌI mức vượt dự toán → bắt buộc nhập giải trình trước khi nộp
+      if (diff > 0 && !justification.trim()) {
+        setSaveErr("Chi phí vượt dự toán — vui lòng nhập giải trình (BR-TR-05).");
+        setSubmitting(false);
+        return;
+      }
       // Ensure expense header exists
       let exp = expense;
       if (!exp) {
         exp = await createExpense(trip.id);
         setExpense(exp);
       }
-      // Submit
-      await submitExpense(trip.id);
+      if (justification.trim()) {
+        await updateExpenseJustification(trip.id, justification.trim());
+      }
+      // Submit — BR-TR-05: BE quyết định luồng (>10% trên giá trị thô ⇒ chuyển thẳng Manager)
+      const submitted = await submitExpense(trip.id);
+      setExpense(submitted);
+      if (submitted.managerReapprovalRequired) {
+        // Không dùng nội dung "bị từ chối" — hồ sơ CHUYỂN cho Manager duyệt bổ sung
+        alert("Đã nộp báo cáo chi phí. Chi phí vượt quá 10% dự toán — hồ sơ đã được chuyển cho Manager duyệt bổ sung trước khi Finance xử lý (BR-TR-05).");
+      }
       await onSave();
     } catch (err) {
       setSaveErr(err instanceof Error ? err.message : "Không thể nộp báo cáo.");
@@ -1866,7 +2010,7 @@ function EmpExpense({ user, onLogout, trip, onBack, onSave }: {
         <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Về Dashboard</button></div>
         {readOnly && (
           <div className="max-w-3xl mb-4 px-3.5 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-xs text-gray-500">
-            {trip.status === "CLOSED" ? "Hồ sơ đã đóng — dữ liệu ở chế độ chỉ đọc." : trip.status === "EXPENSE_APPROVED" ? "Finance đã phê duyệt chi phí — đang chờ đóng hồ sơ." : "Báo cáo đã nộp — đang chờ Finance xem xét."}
+            {trip.status === "CLOSED" ? "Hồ sơ đã đóng — dữ liệu ở chế độ chỉ đọc." : trip.status === "PENDING_MANAGER_ADDITIONAL_APPROVAL" ? "Chờ Manager duyệt bổ sung — chi phí vượt quá 10% dự toán (BR-TR-05), hồ sơ đã được chuyển cho Manager." : trip.status === "EXPENSE_APPROVED" ? "Finance đã phê duyệt chi phí — đang chờ đóng hồ sơ." : "Báo cáo đã nộp — đang chờ Finance xem xét."}
           </div>
         )}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -1885,6 +2029,7 @@ function EmpExpense({ user, onLogout, trip, onBack, onSave }: {
                     </div>
                     <p className="text-sm text-gray-700">{item.label}</p>
                     <p className="text-xs text-gray-400 mt-0.5">{item.date}</p>
+                    {item.receipt && <p className="text-xs text-blue-600 mt-0.5">📎 {item.receipt}</p>}
                   </div>
                 ))}
               </div>
@@ -1902,13 +2047,21 @@ function EmpExpense({ user, onLogout, trip, onBack, onSave }: {
                   <span>{Math.abs(diff).toLocaleString("vi-VN")}đ</span>
                 </div>
                 {overPct !== 0 && (
-                  <p className={`text-xs text-right ${overPct > 10 ? "text-red-500" : "text-gray-400"}`}>
-                    {overPct > 0 ? "+" : ""}{overPct.toFixed(1)}%
-                    {overPct > 10 && " — Finance yêu cầu giải trình"}
+                  <p className={`text-xs text-right ${willRequireManager ? "text-red-500" : "text-gray-400"}`}>
+                    {overPct > 0 ? "+" : ""}{overPct.toFixed(2)}%
+                    {willRequireManager && " — Sẽ gửi Manager duyệt bổ sung"}
                   </p>
                 )}
               </div>
             </Card>
+            {!readOnly && diff > 0 && (
+              <Card className="p-5">
+                <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-2">
+                  Giải trình chênh lệch (bắt buộc khi vượt dự toán — BR-TR-05){willRequireManager && " · Vượt >10%, sẽ gửi Manager duyệt bổ sung ngay khi nộp"}
+                </p>
+                <textarea value={justification} onChange={e => setJustification(e.target.value)} rows={3} placeholder="Nhập lý do chênh lệch dự toán..." className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-[#1b2f35] placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#1b2f35] resize-none transition" />
+              </Card>
+            )}
             {!readOnly && (
               <>
                 {saveErr && <p className="text-xs text-red-500 text-center font-medium px-2">{saveErr}</p>}
@@ -1986,7 +2139,7 @@ function ManagerApp({ user, onLogout }: { user: User; onLogout: () => void }) {
               <p className="text-base font-semibold text-orange-700">Duyệt bổ sung chi phí (BR-TR-05)</p>
               <span className="bg-orange-100 text-orange-700 text-xs font-semibold px-2 py-0.5 rounded-full">{addlQueue.length}</span>
             </div>
-            <div className="mb-2 text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">Chi phí thực tế vượt dự toán &gt;10% — Finance đang chờ Manager phê duyệt bổ sung trước khi đóng hồ sơ.</div>
+            <div className="mb-2 text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">Chi phí thực tế vượt dự toán &gt;10% — hồ sơ đã được chuyển THẲNG cho Manager duyệt bổ sung ngay khi nhân viên nộp (BR-TR-05).</div>
             <div className="flex flex-col gap-3">{addlQueue.map(t => <TripCard key={t.id} trip={t} cta="Duyệt bổ sung" onClick={() => setAddlSelected(t)} />)}</div>
           </section>
         )}
@@ -2046,16 +2199,21 @@ function ApprovalDetail({ user, onLogout, trip, level, onApprove, onReject, onBa
                   </div>
                 ))}
               </div>
-              {needsAdminApproval(trip) && level === 1 && (
-                <div className="mt-3 text-xs bg-blue-50 border border-blue-200 text-blue-700 px-3 py-2 rounded-lg">
-                  Sau khi Manager duyệt, yêu cầu này sẽ chuyển Travel Admin phê duyệt cấp 2.
-                </div>
-              )}
+              <div className="mt-3"><ApprovalLevelsBox requiresLevel2={trip.requiresLevel2 ?? false} reasons={level2Reasons(trip.policyViolations)} /></div>
             </Card>
             <Card className="p-5">
               <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-2">Mục đích chuyến đi</p>
               <p className="text-sm text-gray-600 leading-relaxed">{trip.purpose}</p>
             </Card>
+            {additionalApproval && (
+              /* BR-TR-05: Manager duyệt bổ sung phải XEM ĐƯỢC giải trình + bảng dự toán/thực tế/chênh lệch */
+              <Card className="p-5">
+                <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-3">
+                  Chi phí thực tế &amp; giải trình (BR-TR-05)
+                </p>
+                <ExpenseReviewPanel tripId={trip.id} />
+              </Card>
+            )}
             {level === 1 && (
               <Card className="p-5">
                 <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-2">Lịch trình (xem trước)</p>
@@ -2160,32 +2318,30 @@ function FinanceApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [view, setView] = useState<"dashboard" | "expense" | "close">("dashboard");
 
   const settling = trips.filter(t => t.status === "EXPENSE_SUBMITTED");
+  // BR-TR-05: trip đang chờ Manager duyệt bổ sung — Finance CHỈ XEM, không có thao tác nào
   const pending  = trips.filter(t => t.status === "PENDING_MANAGER_ADDITIONAL_APPROVAL");
   const closed   = trips.filter(t => t.status === "CLOSED");
   // BUG-03: EXPENSE_APPROVED = Finance approve xong nhưng chưa gọi closeTrip()
   const readyToClose = trips.filter(t => t.status === "EXPENSE_APPROVED");
-  const allFin   = trips.filter(t => ["APPROVED","TRIP_IN_PROGRESS","EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","EXPENSE_APPROVED","CLOSED"].includes(t.status));
+  // BR-TR-05: KHÔNG đưa hồ sơ chờ Manager duyệt bổ sung vào danh sách Finance xử lý
+  const allFin   = trips.filter(t => ["APPROVED","TRIP_IN_PROGRESS","EXPENSE_DRAFT","EXPENSE_SUBMITTED","EXPENSE_APPROVED","CLOSED"].includes(t.status));
 
   async function handleCloseTrip(finNote: string) {
     if (!selected) return;
     try {
-      await approveExpense(selected.id, finNote || undefined);
+      // BUG-FE-1: chỉ gọi approve khi hồ sơ còn ở EXPENSE_SUBMITTED.
+      // Nếu trip đã EXPENSE_APPROVED (Finance đã duyệt trước đó) → gọi THẲNG closeTrip,
+      // tránh approve lần 2 gây 409 INVALID_STATUS_TRANSITION làm hồ sơ kẹt vĩnh viễn.
+      if (selected.status === "EXPENSE_SUBMITTED") {
+        await approveExpense(selected.id, finNote || undefined);
+      }
       await closeTrip(selected.id, finNote || undefined);
       await reload(); void reloadDash();
     } catch (err) { alert(err instanceof Error ? err.message : "Lỗi đóng hồ sơ."); }
     setSelected(null); setView("dashboard");
   }
 
-  async function routeToManagerAdditional() {
-    if (!selected) return;
-    try {
-      await rejectExpense(selected.id, "Chi phí vượt >10% — chuyển Manager phê duyệt bổ sung (BR-TR-05).");
-      await reload(); void reloadDash();
-    } catch (err) { alert(err instanceof Error ? err.message : "Lỗi chuyển Manager."); }
-    setSelected(null); setView("dashboard");
-  }
-
-  if (view === "expense" && selected) return <FinExpense user={user} onLogout={onLogout} trip={selected} onClose={() => setView("close")} onRouteToManager={routeToManagerAdditional} onBack={() => { setSelected(null); setView("dashboard"); }} />;
+  if (view === "expense" && selected) return <FinExpense user={user} onLogout={onLogout} trip={selected} onClose={() => setView("close")} onBack={() => { setSelected(null); setView("dashboard"); }} />;
   if (view === "close"   && selected) return <FinClose   user={user} onLogout={onLogout} trip={selected} onConfirm={handleCloseTrip} onBack={() => { setSelected(null); setView("dashboard"); }} />;
 
   return (
@@ -2206,10 +2362,10 @@ function FinanceApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         {pending.length > 0 && (
           <section>
             <div className="flex items-center gap-2 mb-3">
-              <p className="text-base font-semibold text-orange-700">Chờ Manager duyệt bổ sung</p>
+              <p className="text-base font-semibold text-orange-700">Chờ Manager duyệt bổ sung (chỉ xem)</p>
               <span className="bg-orange-100 text-orange-700 text-xs font-semibold px-2 py-0.5 rounded-full">{pending.length}</span>
             </div>
-            <div className="mb-2 text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">Chi phí vượt &gt;10% — đã gửi Manager xét duyệt bổ sung. Vui lòng chờ phản hồi.</div>
+            <div className="mb-2 text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">Chi phí vượt &gt;10% — hồ sơ đã chuyển cho Manager ngay khi nhân viên nộp (BR-TR-05). Finance chỉ xem, không thao tác được cho đến khi Manager duyệt bổ sung.</div>
             <div className="flex flex-col gap-3">{pending.map(t => <TripCard key={t.id} trip={t} />)}</div>
           </section>
         )}
@@ -2245,8 +2401,8 @@ function FinanceApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   );
 }
 
-function FinExpense({ user, onLogout, trip, onClose, onRouteToManager, onBack }: {
-  user: User; onLogout: () => void; trip: Trip; onClose: () => void; onRouteToManager: () => void; onBack: () => void;
+function FinExpense({ user, onLogout, trip, onClose, onBack }: {
+  user: User; onLogout: () => void; trip: Trip; onClose: () => void; onBack: () => void;
 }) {
   const [expense, setExpense] = useState<BackendExpense | null>(null);
   const [expLoading, setExpLoading] = useState(true);
@@ -2257,10 +2413,13 @@ function FinExpense({ user, onLogout, trip, onClose, onRouteToManager, onBack }:
 
   const totalActual   = expense?.totalActual ?? 0;
   const totalBudgeted = expense?.estimatedBudgetSnapshot ?? trip.budget;
-  const overPct = totalBudgeted > 0 ? ((totalActual - totalBudgeted) / totalBudgeted) * 100 : 0;
-  const overTolerance = overPct > 10;
+  // BR-TR-05: quyết định ngưỡng lấy từ CỜ do BE trả về — FE KHÔNG tự tính lại %
+  const requiresManagerReapproval = expense?.managerReapprovalRequired ?? false;
   const alreadyApproved = expense?.managerReapproved ?? false;
-  const needsExplanation = overTolerance && !alreadyApproved;
+  const needsExplanation = requiresManagerReapproval && !alreadyApproved;
+  // % chỉ để hiển thị, ưu tiên giá trị BE đã tính sẵn (2 chữ số thập phân)
+  const rawPct = totalBudgeted > 0 ? ((totalActual - totalBudgeted) / totalBudgeted) * 100 : 0;
+  const overPctText = variancePctText(expense?.variancePct, rawPct);
 
   // Map to ExpenseItem[] for VarianceTable display
   const items: ExpenseItem[] = (expense?.items ?? []).map(i => ({
@@ -2284,23 +2443,30 @@ function FinExpense({ user, onLogout, trip, onClose, onRouteToManager, onBack }:
       <PageHeader label={trip.tripCode} title="Chi phí thực tế" subtitle={`${trip.from} — ${trip.to} · ${trip.employeeName}`} action={<ExportBtn />} />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7">
         <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Quay lại</button></div>
-        {overTolerance && alreadyApproved && (
+        {requiresManagerReapproval && alreadyApproved && (
           <div className="max-w-3xl mb-4 flex items-start gap-2.5 px-4 py-3 rounded-lg border bg-emerald-50 border-emerald-200 text-emerald-700 text-sm">
             <span className="text-xs font-bold bg-emerald-200 text-emerald-700 px-1.5 py-0.5 rounded shrink-0 mt-0.5">BR-TR-05</span>
-            <div>Chi phí vượt <strong>{overPct.toFixed(1)}%</strong> đã được Manager phê duyệt bổ sung — Finance có thể đóng hồ sơ.</div>
+            <div>Chi phí vượt <strong>{overPctText}</strong> đã được Manager phê duyệt bổ sung — Finance có thể duyệt và đóng hồ sơ.</div>
           </div>
         )}
         {needsExplanation && (
-          <div className="max-w-3xl mb-4 flex items-start gap-2.5 px-4 py-3 rounded-lg border bg-red-50 border-red-200 text-red-700 text-sm">
-            <span className="text-xs font-bold bg-red-200 text-red-700 px-1.5 py-0.5 rounded shrink-0 mt-0.5">BR-TR-05</span>
-            <div>Chi phí thực tế vượt dự toán <strong>{overPct.toFixed(1)}%</strong> (vượt ngưỡng 10%) — phải chuyển Manager phê duyệt bổ sung trước khi Finance đóng hồ sơ.</div>
+          <div className="max-w-3xl mb-4 flex items-start gap-2.5 px-4 py-3 rounded-lg border bg-orange-50 border-orange-200 text-orange-700 text-sm">
+            <span className="text-xs font-bold bg-orange-200 text-orange-700 px-1.5 py-0.5 rounded shrink-0 mt-0.5">BR-TR-05</span>
+            <div>Chi phí thực tế vượt dự toán <strong>{overPctText}</strong> — đang chờ Manager duyệt bổ sung. Finance chỉ xem, chưa thể duyệt/đóng hồ sơ.</div>
           </div>
         )}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          <div className="lg:col-span-2">
+          <div className="lg:col-span-2 flex flex-col gap-4">
             <Card className="p-6">
               <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-4">Bảng so sánh chi phí</p>
               <VarianceTable items={items} />
+            </Card>
+            {/* BR-TR-05: Finance phải đọc được giải trình chênh lệch của nhân viên */}
+            <Card className="p-5">
+              <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-2">Giải trình chênh lệch của nhân viên (BR-TR-05)</p>
+              <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                {expense?.justification?.trim() || "— Chưa có giải trình —"}
+              </p>
             </Card>
           </div>
           <div className="flex flex-col gap-4">
@@ -2312,16 +2478,17 @@ function FinExpense({ user, onLogout, trip, onClose, onRouteToManager, onBack }:
                 ))}
                 <div className="flex justify-between border-t border-gray-100 pt-2"><span className="text-gray-400">Dự toán</span><span className="font-bold">{totalBudgeted.toLocaleString("vi-VN")}đ</span></div>
                 <div className="flex justify-between"><span className="text-gray-400">Thực tế</span><span className={`font-bold ${totalActual > totalBudgeted ? "text-red-600" : "text-emerald-700"}`}>{totalActual.toLocaleString("vi-VN")}đ</span></div>
-                {overPct !== 0 && <p className={`text-xs text-right font-semibold ${needsExplanation ? "text-red-500" : "text-emerald-600"}`}>{overPct > 0 ? "+" : ""}{overPct.toFixed(1)}%</p>}
+                {rawPct !== 0 && <p className={`text-xs text-right font-semibold ${needsExplanation ? "text-orange-500" : "text-emerald-600"}`}>{overPctText}</p>}
               </div>
             </Card>
             <Card className="p-5">
               <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-2">Thao tác</p>
-              {needsExplanation && <p className="text-xs text-red-500 mb-3">Vượt &gt;10% — phải gửi Manager phê duyệt bổ sung (BR-TR-05).</p>}
               {needsExplanation ? (
-                <button onClick={onRouteToManager} className="w-full py-2.5 text-sm font-semibold text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors">
-                  Gửi Manager duyệt bổ sung
-                </button>
+                /* BR-TR-05: hồ sơ >10% do BE chuyển thẳng cho Manager ngay khi nhân viên submit —
+                   Finance CHỈ XEM, không có nút thao tác ở bước này */
+                <p className="text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
+                  Đang chờ Manager duyệt bổ sung. Finance không thao tác được ở bước này.
+                </p>
               ) : (
                 <button onClick={onClose} className="w-full py-2.5 text-sm font-semibold text-white bg-amber-500 hover:bg-amber-600 rounded-lg transition-colors">
                   Duyệt chi phí & Đóng hồ sơ
@@ -2348,9 +2515,12 @@ function FinClose({ user, onLogout, trip, onConfirm, onBack }: {
 
   const totalActual   = expense?.totalActual ?? 0;
   const totalBudgeted = expense?.estimatedBudgetSnapshot ?? trip.budget;
-  const overPct = totalBudgeted > 0 ? ((totalActual - totalBudgeted) / totalBudgeted) * 100 : 0;
-  const overTolerance = overPct > 10;
-  const needsExplanation = overTolerance && !(expense?.managerReapproved ?? false);
+  // BR-TR-05: quyết định ngưỡng lấy từ CỜ do BE trả về — FE KHÔNG tự tính lại %
+  const requiresManagerReapproval = expense?.managerReapprovalRequired ?? false;
+  const needsExplanation = requiresManagerReapproval && !(expense?.managerReapproved ?? false);
+  // % chỉ để hiển thị, ưu tiên giá trị BE đã tính sẵn (2 chữ số thập phân)
+  const rawPct = totalBudgeted > 0 ? ((totalActual - totalBudgeted) / totalBudgeted) * 100 : 0;
+  const overPctText = variancePctText(expense?.variancePct, rawPct);
   const hasExpenses = totalActual > 0;
 
   if (expLoading) {
@@ -2379,9 +2549,14 @@ function FinClose({ user, onLogout, trip, onConfirm, onBack }: {
             </div>
           </div>
           <div className="bg-gray-50 border border-gray-100 rounded-lg p-4 text-sm flex flex-col gap-2 mb-5">
-            {[ ["Mã chuyến", trip.id], ["Nhân viên", trip.employeeName], ["Tuyến", `${trip.from} — ${trip.to}`], ["Ngày", `${trip.departDate} – ${trip.returnDate}`], ["Dự toán", `${totalBudgeted.toLocaleString("vi-VN")}đ`], ["Thực tế", `${totalActual.toLocaleString("vi-VN")}đ`], ["Chênh lệch", `${overPct > 0 ? "+" : ""}${overPct.toFixed(1)}%`] ].map(([k, v]) => (
-              <div key={k} className="flex justify-between gap-4"><span className="text-gray-400">{k}</span><span className={`font-medium text-right ${k === "Chênh lệch" && overPct > 10 ? "text-red-500 font-bold" : ""}`}>{v}</span></div>
+            {[ ["Mã chuyến", trip.id], ["Nhân viên", trip.employeeName], ["Tuyến", `${trip.from} — ${trip.to}`], ["Ngày", `${trip.departDate} – ${trip.returnDate}`], ["Dự toán", `${totalBudgeted.toLocaleString("vi-VN")}đ`], ["Thực tế", `${totalActual.toLocaleString("vi-VN")}đ`], ["Chênh lệch", overPctText] ].map(([k, v]) => (
+              <div key={k} className="flex justify-between gap-4"><span className="text-gray-400">{k}</span><span className={`font-medium text-right ${k === "Chênh lệch" && requiresManagerReapproval ? "text-red-500 font-bold" : ""}`}>{v}</span></div>
             ))}
+          </div>
+          {/* BR-TR-05: Finance đọc giải trình chênh lệch của nhân viên trước khi đóng hồ sơ */}
+          <div className="bg-amber-50 border border-amber-100 rounded-lg p-4 mb-5">
+            <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-1">Giải trình chênh lệch của nhân viên (BR-TR-05)</p>
+            <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{expense?.justification?.trim() || "— Chưa có giải trình —"}</p>
           </div>
           {needsExplanation && (
             <div className="mb-4">
