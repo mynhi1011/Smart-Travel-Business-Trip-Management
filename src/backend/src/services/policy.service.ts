@@ -1,30 +1,25 @@
 /**
  * policy.service.ts — Policy Check Engine
  *
- * Implements toàn bộ Business Rules liên quan đến kiểm tra chính sách
- * công tác trước khi submit (architecture.md §5.3).
+ * Implements Business Rules kiểm tra chính sách trước khi submit (architecture.md §5.3).
  *
  * Business Rules:
- *   BR-TR-01 — Hotel limit theo jobGrade
- *   BR-TR-02 — Per diem cap theo destination type
- *   BR-TR-03 — Advance notice ≥ 3 working days
+ *   BR-TR-03 — Advance notice ≥ 3 working days (URGENT_TRIP_NOTICE)
  *   BR-TR-04 — Budget threshold → requires level 2 approval
+ *   BR-TR-08 — Combined cost limit (plannedBudget vs hotel+perDiem combined limit)
+ *
+ * BR-TR-01 và BR-TR-02 chỉ là mức tham chiếu — KHÔNG phát sinh warning riêng.
+ * Kiểm tra tổng hợp duy nhất là BR-TR-08 (checkCombinedCostLimit).
+ *
+ * Tài liệu tham chiếu: business-rules.md, decision-log.md D-10, D-15, D-16
  */
 
-// ─── Constants (BR-TR-01, BR-TR-02) ──────────────────────────────────────────
+// Re-export hằng số từ policyRules để các module khác vẫn import được từ policy.service
+export { HOTEL_LIMIT_PER_NIGHT as HOTEL_LIMIT, PER_DIEM_RATE } from './policyRules';
+import { calcTripDays, checkCombinedCostLimit } from './policyRules';
 
-/** Hạn mức khách sạn theo cấp bậc (VNĐ/đêm) — BR-TR-01, D-06 */
-export const HOTEL_LIMIT: Record<string, number> = {
-  STAFF:          1_000_000,
-  MANAGER_GRADE:  1_800_000,
-  DIRECTOR:       3_000_000,
-};
-
-/** Mức per diem theo loại địa điểm (VNĐ/ngày) — BR-TR-02 */
-export const PER_DIEM_RATE: Record<string, number> = {
-  TIER1_CITY: 400_000, // Hà Nội, TP.HCM, Đà Nẵng
-  OTHER:      300_000, // Các tỉnh thành khác
-};
+// ─── Re-export for backwards compat ──────────────────────────────────────────
+export { calcTripDays };
 
 /** Ngưỡng ngân sách cần duyệt cấp 2 (VNĐ) — BR-TR-04 */
 export const LEVEL2_BUDGET_THRESHOLD = 20_000_000;
@@ -35,10 +30,9 @@ export const MIN_ADVANCE_WORKING_DAYS = 3;
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type ViolationCode =
-  | 'POLICY_VIOLATION_ACCOMMODATION_OVER_BUDGET'
-  | 'POLICY_VIOLATION_PER_DIEM_EXCEEDED'
-  | 'URGENT_TRIP_NOTICE'
-  | 'POLICY_VIOLATION_BUDGET_THRESHOLD';
+  | 'COMBINED_COST_LIMIT_EXCEEDED'    // BR-TR-08 — tổng hạn mức kết hợp
+  | 'URGENT_TRIP_NOTICE'              // BR-TR-03 — nộp < 3 ngày làm việc
+  | 'POLICY_VIOLATION_BUDGET_THRESHOLD'; // BR-TR-04 — ngân sách > 20M
 
 export type ViolationSeverity = 'WARNING' | 'BLOCKER';
 
@@ -49,6 +43,14 @@ export interface PolicyViolation {
   rule: string;
   limit?: number;
   actual?: number;
+  // BR-TR-08 extra fields
+  combinedLimit?: number;
+  hotelLimitTotal?: number;
+  perDiemLimitTotal?: number;
+  tripDays?: number;
+  hotelNights?: number;
+  jobGrade?: string;
+  destinationType?: string;
 }
 
 export interface PolicyCheckResult {
@@ -59,21 +61,20 @@ export interface PolicyCheckResult {
 }
 
 export interface PolicyCheckInput {
-  jobGrade: string;           // STAFF | MANAGER_GRADE | DIRECTOR
-  destinationType: string;    // TIER1_CITY | OTHER
-  estimatedBudget: number;    // Tổng dự toán VNĐ
-  hotelCostPerNight?: number; // Chi phí khách sạn/đêm
-  perDiemBudget?: number;     // Dự toán phụ cấp
-  tripDays: number;           // Số ngày công tác
-  departureDate: Date;        // Ngày khởi hành
-  createdAt: Date;            // Ngày tạo request (để tính working days)
+  jobGrade: string;          // STAFF | MANAGER_GRADE | DIRECTOR (từ DB user, không từ client)
+  destination: string;       // Chuỗi điểm đến người dùng nhập
+  estimatedBudget: number;   // plannedBudget — Combined_Actual (BR-TR-08)
+  tripDays: number;          // Số ngày công tác (tính sẵn)
+  departureDate: Date;       // Ngày khởi hành
+  returnDate: Date;          // Ngày về (để tính tripDays nội bộ nếu cần)
+  createdAt: Date;           // Ngày tạo request (để tính working days)
 }
 
 // ─── Helper: Working Days Calculator ─────────────────────────────────────────
 
 /**
- * Tính số ngày làm việc giữa 2 ngày (không tính weekend)
- * Chưa tính ngày lễ — đủ cho MVP scope
+ * countWorkingDays — đếm ngày làm việc giữa 2 ngày (bỏ Thứ 7, Chủ nhật)
+ * Chưa tính ngày lễ — đủ cho MVP scope.
  */
 export function countWorkingDays(from: Date, to: Date): number {
   let count = 0;
@@ -85,7 +86,6 @@ export function countWorkingDays(from: Date, to: Date): number {
   while (current < end) {
     const dayOfWeek = current.getDay();
     if (dayOfWeek !== 0 && dayOfWeek !== 6) {
-      // 0 = Sunday, 6 = Saturday
       count++;
     }
     current.setDate(current.getDate() + 1);
@@ -94,23 +94,27 @@ export function countWorkingDays(from: Date, to: Date): number {
   return count;
 }
 
-// ─── White-list: vi phạm THẬT buộc duyệt cấp 2 (BR-TR-04) ────────────────────
-// Chỉ các code này đẩy trip sang 2 cấp — ghi chú/INFO (vd PER_DIEM_NOTE của FE,
-// warning BR-TR-01 accommodation) KHÔNG được tính.
+// ─── White-list: violations đẩy trip sang 2 cấp (BR-TR-04) ──────────────────
+// Chỉ 3 code sau → 2 cấp duyệt (D-16):
+//   URGENT_TRIP_NOTICE          — BR-TR-03: nộp < 3 ngày làm việc
+//   POLICY_VIOLATION_BUDGET_THRESHOLD — BR-TR-04: ngân sách > 20M
+//   COMBINED_COST_LIMIT_EXCEEDED — BR-TR-08: vượt tổng hạn mức
 const LEVEL2_REQUIRED_CODES: ReadonlySet<string> = new Set([
-  'POLICY_VIOLATION_PER_DIEM_EXCEEDED', // BR-TR-02 — vượt per diem
-  'URGENT_TRIP_NOTICE',                 // BR-TR-03 — LATE_SUBMISSION: nộp < 3 ngày làm việc
-  'POLICY_VIOLATION_BUDGET_THRESHOLD',   // BR-TR-04 — ngân sách > 20 triệu
+  'URGENT_TRIP_NOTICE',
+  'POLICY_VIOLATION_BUDGET_THRESHOLD',
+  'COMBINED_COST_LIMIT_EXCEEDED',
 ]);
 
 /**
- * requiresLevel2FromViolations — hàm thuần duy nhất quyết định "cần cấp 2"
- * từ danh sách violations. Dùng thống nhất ở runPolicyCheck và approveTrip.
+ * requiresLevel2FromViolations — nguồn sự thật duy nhất cho "cần cấp 2?"
+ * Dùng nhất quán ở runPolicyCheck và approveTrip.
  */
 export function requiresLevel2FromViolations(
   violations: ReadonlyArray<{ code: string; severity: string }>
 ): boolean {
-  return violations.some((v) => LEVEL2_REQUIRED_CODES.has(v.code) && v.severity !== 'INFO');
+  return violations.some(
+    (v) => LEVEL2_REQUIRED_CODES.has(v.code) && v.severity !== 'INFO'
+  );
 }
 
 // ─── Policy Check Engine ──────────────────────────────────────────────────────
@@ -118,76 +122,82 @@ export function requiresLevel2FromViolations(
 /**
  * runPolicyCheck — Chạy toàn bộ business rules kiểm tra chính sách
  *
- * @param input - Thông tin trip và user để kiểm tra
- * @returns PolicyCheckResult với danh sách violations
+ * Checks:
+ *   1. BR-TR-03: Advance notice (< 3 working days → URGENT_TRIP_NOTICE)
+ *   2. BR-TR-04: Budget threshold (> 20M → POLICY_VIOLATION_BUDGET_THRESHOLD)
+ *   3. BR-TR-08: Combined cost limit (plannedBudget > combinedLimit → COMBINED_COST_LIMIT_EXCEEDED)
+ *
+ * KHÔNG check BR-TR-01 (hotel per night riêng) hay BR-TR-02 (per diem riêng).
+ * Đây là thay đổi theo D-15, D-16.
  */
 export function runPolicyCheck(input: PolicyCheckInput): PolicyCheckResult {
   const violations: PolicyViolation[] = [];
-
-  // ── BR-TR-01: Hotel limit theo jobGrade ────────────────────────────────────
-  if (input.hotelCostPerNight !== undefined && input.hotelCostPerNight > 0) {
-    const hotelLimit = HOTEL_LIMIT[input.jobGrade];
-    if (hotelLimit !== undefined && input.hotelCostPerNight > hotelLimit) {
-      violations.push({
-        code: 'POLICY_VIOLATION_ACCOMMODATION_OVER_BUDGET',
-        detail: `Chi phí khách sạn ${input.hotelCostPerNight.toLocaleString('vi-VN')} VNĐ/đêm vượt hạn mức ${input.jobGrade} (${hotelLimit.toLocaleString('vi-VN')} VNĐ/đêm)`,
-        severity: 'WARNING',
-        rule: 'BR-TR-01',
-        limit: hotelLimit,
-        actual: input.hotelCostPerNight,
-      });
-    }
-  }
-
-  // ── BR-TR-02: Per diem cap ─────────────────────────────────────────────────
-  if (input.perDiemBudget !== undefined && input.perDiemBudget > 0) {
-    const dailyRate = PER_DIEM_RATE[input.destinationType] ?? PER_DIEM_RATE['OTHER'];
-    const maxPerDiem = input.tripDays * (dailyRate ?? 0);
-    if (input.perDiemBudget > maxPerDiem) {
-      violations.push({
-        code: 'POLICY_VIOLATION_PER_DIEM_EXCEEDED',
-        detail: `Phụ cấp công tác ${input.perDiemBudget.toLocaleString('vi-VN')} VNĐ vượt mức tối đa ${maxPerDiem.toLocaleString('vi-VN')} VNĐ (${input.tripDays} ngày × ${dailyRate?.toLocaleString('vi-VN')} VNĐ/ngày)`,
-        // D-10: Per Diem vượt mức là WARNING — không chặn submit. Chỉ ảnh hưởng quyết định phê duyệt ở bước Manager/Travel Admin review.
-        severity: 'WARNING',
-        rule: 'BR-TR-02',
-        limit: maxPerDiem,
-        actual: input.perDiemBudget,
-      });
-    }
-  }
 
   // ── BR-TR-03: Advance notice ≥ 3 working days ─────────────────────────────
   const workingDaysAdvance = countWorkingDays(input.createdAt, input.departureDate);
   if (workingDaysAdvance < MIN_ADVANCE_WORKING_DAYS) {
     violations.push({
-      code: 'URGENT_TRIP_NOTICE',
+      code:   'URGENT_TRIP_NOTICE',
       detail: `Yêu cầu được tạo chỉ ${workingDaysAdvance} ngày làm việc trước khởi hành (tối thiểu ${MIN_ADVANCE_WORKING_DAYS} ngày)`,
       severity: 'WARNING',
-      rule: 'BR-TR-03',
-      limit: MIN_ADVANCE_WORKING_DAYS,
+      rule:   'BR-TR-03',
+      limit:  MIN_ADVANCE_WORKING_DAYS,
       actual: workingDaysAdvance,
     });
   }
 
-  // ── BR-TR-04: Budget threshold → violation code + level 2 ───────────────────
+  // ── BR-TR-04: Budget threshold → violation + level 2 ────────────────────
   if (input.estimatedBudget > LEVEL2_BUDGET_THRESHOLD) {
     violations.push({
-      code: 'POLICY_VIOLATION_BUDGET_THRESHOLD',
-      detail: `Tổng dự toán ${input.estimatedBudget.toLocaleString('vi-VN')} VNĐ vượt ngưỡng ${LEVEL2_BUDGET_THRESHOLD.toLocaleString('vi-VN')} VNĐ — bắt buộc phê duyệt cấp 2`,
+      code:   'POLICY_VIOLATION_BUDGET_THRESHOLD',
+      detail: `Ngân sách dự kiến ${input.estimatedBudget.toLocaleString('vi-VN')} VNĐ vượt ngưỡng ${LEVEL2_BUDGET_THRESHOLD.toLocaleString('vi-VN')} VNĐ — bắt buộc phê duyệt cấp 2`,
       severity: 'WARNING',
-      rule: 'BR-TR-04',
-      limit: LEVEL2_BUDGET_THRESHOLD,
+      rule:   'BR-TR-04',
+      limit:  LEVEL2_BUDGET_THRESHOLD,
       actual: input.estimatedBudget,
     });
   }
 
-  // Chỉ vi phạm white-list BR-TR-04 (per diem / late / budget) mới buộc cấp 2
+  // ── BR-TR-08: Combined cost limit ────────────────────────────────────────
+  const costResult = checkCombinedCostLimit({
+    startDate:     input.departureDate,
+    endDate:       input.returnDate,
+    jobGrade:      input.jobGrade,
+    destination:   input.destination,
+    plannedBudget: input.estimatedBudget,
+  });
+
+  if (costResult.exceeded) {
+    const destLabel = costResult.destinationType === 'TIER1_CITY'
+      ? 'Hà Nội / TP.HCM / Đà Nẵng'
+      : 'tỉnh/thành phố khác';
+    const jobGradeLabel: Record<string, string> = {
+      STAFF: 'Staff', MANAGER_GRADE: 'Manager', DIRECTOR: 'Director',
+    };
+    const grade = jobGradeLabel[costResult.jobGrade] ?? costResult.jobGrade;
+    violations.push({
+      code:   'COMBINED_COST_LIMIT_EXCEEDED',
+      detail: `Vi phạm chính sách BR-TR-08: Ngân sách dự kiến ${costResult.plannedBudget.toLocaleString('vi-VN')} VNĐ vượt tổng hạn mức lưu trú và phụ cấp ${costResult.combinedLimit.toLocaleString('vi-VN')} VNĐ (${grade}, ${costResult.tripDays} ngày / ${costResult.hotelNights} đêm, ${destLabel})`,
+      severity: 'WARNING',
+      rule:   'BR-TR-08',
+      limit:  costResult.combinedLimit,
+      actual: costResult.plannedBudget,
+      combinedLimit:    costResult.combinedLimit,
+      hotelLimitTotal:  costResult.hotelLimitTotal,
+      perDiemLimitTotal: costResult.perDiemLimitTotal,
+      tripDays:         costResult.tripDays,
+      hotelNights:      costResult.hotelNights,
+      jobGrade:         costResult.jobGrade,
+      destinationType:  costResult.destinationType,
+    });
+  }
+
   const requiresLevel2 = requiresLevel2FromViolations(violations);
 
   return {
-    passed: violations.length === 0,
+    passed:                violations.length === 0,
     violations,
-    violationCount: violations.length,
+    violationCount:        violations.length,
     requiresLevel2Approval: requiresLevel2,
   };
 }

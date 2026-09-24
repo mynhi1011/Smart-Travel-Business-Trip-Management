@@ -102,6 +102,7 @@ model Trip {
   isUrgent           Boolean  @default(false) @map("is_urgent")     // BR-TR-03
   urgencyReason      String?  @map("urgency_reason")
   requiresLevel2     Boolean  @default(false) @map("requires_level2") // BR-TR-04
+  approvalReasons    String?  @map("approval_reasons") // JSON: ApprovalReason[] snapshot — BR-TR-04/08, D-16
   submittedAt        DateTime? @map("submitted_at")
   approvedAt         DateTime? @map("approved_at")
   closedAt           DateTime? @map("closed_at")

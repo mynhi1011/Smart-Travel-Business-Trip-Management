@@ -5,52 +5,44 @@
  *   - API.md §5 POST /trips — validation rules từng field
  *   - US-01 — validation matrix, hard vs soft validation
  *   - data-model.md §3.3 — constraints DB
+ *   - BR-TR-08 (D-16): KHÔNG còn ô nhập hotel/perDiem từ client
  *
  * Hard validation (trả 400 nếu vi phạm):
  *   - origin/destination: required, 1–200 chars
- *   - destinationType: enum TIER1_CITY | OTHER
  *   - departureDate: required, >= today (không phải quá khứ) — TC-D01
  *   - returnDate: required, >= departureDate — TC-D02
  *   - purpose: required, 10–1000 chars
  *   - estimatedBudget: required, integer > 0 — TC-P08
- *   - hotelCostPerNight/hotelNights: optional, integer >= 0
- *   - perDiemBudget/transportBudget/otherBudget: optional, integer >= 0
- *   - urgencyReason: bắt buộc khi isUrgent=true (kiểm tra ở service layer)
+ *   - urgencyReason: bắt buộc khi workingDays < 3 (kiểm tra cả ở schema và service)
  *
- * Soft validation (trả 201 + warnings[], không block):
- *   - perDiemBudget > tripDays × PER_DIEM_RATE → POLICY_VIOLATION_PER_DIEM_EXCEEDED
+ * Fields ĐÃ XÓA (D-16): hotelCostPerNight, hotelNights, perDiemBudget,
+ *   transportBudget, otherBudget — không nhận từ client nữa.
  *
- * Server-computed fields — bị STRIP hoàn toàn nếu client gửi lên:
- *   tripDays, isUrgent, requiresLevel2, status, employeeId
+ * Server-computed fields — bị STRIP nếu client gửi lên:
+ *   tripDays, isUrgent, requiresLevel2, status, employeeId, destinationType
+ *
+ * destinationType: được server tự suy ra từ destination bằng resolveDestinationType()
+ *   (policyRules.ts). Client KHÔNG cần và KHÔNG được gửi trường này nữa.
  */
 
 import { z } from 'zod';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Lấy ngày hôm nay ở dạng YYYY-MM-DD theo server clock
- * Reset về midnight để so sánh date-only (không tính giờ)
- */
 function todayDateOnly(): Date {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
   return d;
 }
 
-/**
- * Parse YYYY-MM-DD string thành Date (midnight UTC)
- * Trả null nếu không hợp lệ
- */
 function parseDateOnly(s: string): Date | null {
   const d = new Date(s + 'T00:00:00.000Z');
   return isNaN(d.getTime()) ? null : d;
 }
 
 /**
- * BUG-20: Đếm ngày làm việc từ from → to (bỏ Thứ 7, Chủ nhật)
+ * countWorkingDaysLocal — đếm ngày làm việc (bỏ T7, CN)
  * Dùng nội bộ trong validator — không import policy.service để tránh circular dep.
- * Logic giống countWorkingDays() trong policy.service.ts
  */
 function countWorkingDaysLocal(from: Date, to: Date): number {
   let count = 0;
@@ -71,8 +63,8 @@ function countWorkingDaysLocal(from: Date, to: Date): number {
 /**
  * createTripSchema — Zod schema cho POST /api/v1/trips request body
  *
- * Áp dụng .strict() để bắt các field lạ mà client tự thêm vào
- * (server-computed fields sẽ bị báo lỗi rõ ràng thay vì âm thầm bỏ qua)
+ * Lưu ý: destinationType KHÔNG còn là field nhận từ client.
+ * Server tự tính từ destination bằng resolveDestinationType().
  */
 export const createTripSchema = z
   .object({
@@ -88,11 +80,6 @@ export const createTripSchema = z
       .trim()
       .min(1, 'Điểm đến không được để trống')
       .max(200, 'Điểm đến tối đa 200 ký tự'),
-
-    destinationType: z.enum(['TIER1_CITY', 'OTHER'], {
-      required_error: 'Loại điểm đến là bắt buộc',
-      invalid_type_error: 'Loại điểm đến phải là TIER1_CITY hoặc OTHER',
-    }),
 
     departureDate: z
       .string({ required_error: 'Ngày khởi hành là bắt buộc' })
@@ -110,46 +97,13 @@ export const createTripSchema = z
 
     estimatedBudget: z
       .number({
-        required_error: 'Tổng dự toán là bắt buộc',
+        required_error:    'Tổng dự toán là bắt buộc',
         invalid_type_error: 'Tổng dự toán phải là số',
       })
       .int('Tổng dự toán phải là số nguyên (VNĐ)')
       .positive('Tổng dự toán phải lớn hơn 0'),
 
-    // ── Optional fields (budget breakdown) ───────────────────────────────────
-    hotelCostPerNight: z
-      .number({ invalid_type_error: 'Chi phí khách sạn/đêm phải là số' })
-      .int('Chi phí khách sạn/đêm phải là số nguyên')
-      .min(0, 'Chi phí khách sạn/đêm không được âm')
-      .optional(),
-
-    hotelNights: z
-      .number({ invalid_type_error: 'Số đêm lưu trú phải là số' })
-      .int('Số đêm lưu trú phải là số nguyên')
-      .min(0, 'Số đêm lưu trú không được âm')
-      .optional(),
-
-    perDiemBudget: z
-      .number({ invalid_type_error: 'Dự toán phụ cấp phải là số' })
-      .int('Dự toán phụ cấp phải là số nguyên')
-      .min(0, 'Dự toán phụ cấp không được âm')
-      .optional(),
-
-    transportBudget: z
-      .number({ invalid_type_error: 'Dự toán đi lại phải là số' })
-      .int('Dự toán đi lại phải là số nguyên')
-      .min(0, 'Dự toán đi lại không được âm')
-      .optional(),
-
-    otherBudget: z
-      .number({ invalid_type_error: 'Chi phí khác phải là số' })
-      .int('Chi phí khác phải là số nguyên')
-      .min(0, 'Chi phí khác không được âm')
-      .optional(),
-
-    // ── Urgency fields (bắt buộc khi isUrgent được tính bởi server) ──────────
-    // urgencyReason: optional ở schema-level, nhưng bắt buộc ở service-level
-    // khi countWorkingDays(today, departureDate) < 3 (BR-TR-03)
+    // ── Urgency (bắt buộc khi workingDays < 3 — kiểm tra ở superRefine) ──────
     urgencyReason: z
       .string()
       .trim()
@@ -197,8 +151,7 @@ export const createTripSchema = z
       });
     }
 
-    // BUG-20 fix: urgencyReason bắt buộc ở schema layer khi workingDays < 3 (BR-TR-03)
-    // Tránh phụ thuộc vào service layer để catch sớm, trước khi gọi DB
+    // urgencyReason bắt buộc khi workingDays < 3 (BR-TR-03)
     if (departure >= today) {
       const workingDays = countWorkingDaysLocal(today, departure);
       if (workingDays < 3) {
@@ -219,7 +172,8 @@ export const createTripSchema = z
 /** Type-safe validated input — dùng trong service và controller */
 export type CreateTripInput = z.infer<typeof createTripSchema>;
 
-// ─── Per Diem Warning Checker (Soft Validation — US-01 TC-P03) ───────────────
+// ─── Per Diem Warning — DEPRECATED (giữ để không break imports cũ) ──────────
+// Không còn dùng ở trip.service.ts nhưng giữ export để tránh build error.
 
 export const PER_DIEM_RATE: Record<string, number> = {
   TIER1_CITY: 400_000,
@@ -233,32 +187,11 @@ export interface PerDiemWarning {
   actual: number;
 }
 
-/**
- * checkPerDiemWarning — Kiểm tra soft validation per diem (BR-TR-02)
- *
- * Không block request — chỉ trả về warning để đưa vào response body.
- * Service gọi hàm này sau khi Zod validate thành công.
- *
- * @returns PerDiemWarning | null
- */
+/** @deprecated — BR-TR-02 không còn phát sinh warning riêng (D-15, D-16) */
 export function checkPerDiemWarning(
-  perDiemBudget: number | undefined,
-  destinationType: string,
-  tripDays: number
+  _perDiemBudget: number | undefined,
+  _destinationType: string,
+  _tripDays: number
 ): PerDiemWarning | null {
-  if (!perDiemBudget || perDiemBudget <= 0) return null;
-
-  const rate = PER_DIEM_RATE[destinationType] ?? PER_DIEM_RATE['OTHER'];
-  const maxPerDiem = tripDays * (rate ?? 0);
-
-  if (perDiemBudget > maxPerDiem) {
-    return {
-      code: 'POLICY_VIOLATION_PER_DIEM_EXCEEDED',
-      detail: `Phụ cấp công tác ${perDiemBudget.toLocaleString('vi-VN')} VNĐ vượt mức tối đa ${maxPerDiem.toLocaleString('vi-VN')} VNĐ (${tripDays} ngày × ${rate?.toLocaleString('vi-VN')} VNĐ/ngày theo BR-TR-02)`,
-      maxPerDiem,
-      actual: perDiemBudget,
-    };
-  }
-
   return null;
 }

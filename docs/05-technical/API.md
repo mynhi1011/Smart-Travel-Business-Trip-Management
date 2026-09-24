@@ -54,7 +54,14 @@ Server **bỏ qua hoàn toàn** nếu client cố gửi các trường này:
 |---|---|---|
 | `tripDays` | Trip | `GENERATED ALWAYS AS (returnDate - departureDate + 1)` |
 | `isUrgent` | Trip | Server tính từ working days diff (BR-TR-03) |
-| `requiresLevel2` | Trip | PolicyCheckEngine set (BR-TR-04) |
+| `requiresLevel2` | Trip | `= approvalReasons.length > 0`, PolicyCheckEngine set (BR-TR-04, D-16) |
+| `approvalReasons` | Trip | `buildApprovalReasons()` server-side, snapshot tại submit (D-16) |
+| `destinationType` | Trip | `resolveDestinationType(destination)` server-side (D-16) |
+| `hotelCostPerNight` | Trip | **Đã xóa khỏi API** — không nhận từ client (D-16) |
+| `hotelNights` | Trip | **Đã xóa khỏi API** — không nhận từ client (D-16) |
+| `perDiemBudget` | Trip | **Đã xóa khỏi API** — không nhận từ client (D-16) |
+| `transportBudget` | Trip | **Đã xóa khỏi API** — không nhận từ client (D-16) |
+| `otherBudget` | Trip | **Đã xóa khỏi API** — không nhận từ client (D-16) |
 | `policyCheckResult` | Trip | Kết quả PolicyCheckEngine — server-side only |
 | `variancePct` | Expense | `(totalActual - budgetSnapshot) / budgetSnapshot × 100` |
 | `varianceAmount` | Expense | `totalActual - budgetSnapshot` |
@@ -62,6 +69,23 @@ Server **bỏ qua hoàn toàn** nếu client cố gửi các trường này:
 | `estimatedBudgetSnapshot` | Expense | Server copy từ `trip.estimatedBudget` khi tạo |
 | `managerReapprovalRequired` | Expense | Server set khi `variancePct > 10` (BR-TR-05) |
 | `status` | Trip / Expense | Chỉ thay đổi qua action endpoints |
+
+### Trường mới trong Trip Response (D-16)
+
+| Trường | Kiểu | Mô tả |
+|---|---|---|
+| `approvalReasons` | `ApprovalReason[]` | Snapshot lý do duyệt 2 cấp. Rỗng nếu 1 cấp. |
+| `level1Approval` | `{ approverName, approvedAt, comment } \| null` | Thông tin Manager đã duyệt cấp 1 (khi `PENDING_ADMIN_APPROVAL` hoặc `APPROVED`) |
+
+**Cấu trúc `ApprovalReason`:**
+```json
+{
+  "code": "URGENT_TRIP | BUDGET_OVER_THRESHOLD | COMBINED_COST_LIMIT_EXCEEDED",
+  "title": "Tên lý do (tiếng Việt)",
+  "detail": "Mô tả chi tiết với số liệu cụ thể (tiếng Việt)",
+  "data": {}
+}
+```
 
 ---
 

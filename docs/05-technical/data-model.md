@@ -276,7 +276,8 @@ erDiagram
 | `status` | `trip_status` | NO | `NOT NULL`, `DEFAULT 'DRAFT'` | Trạng thái hiện tại — xem State Machine §9 architecture.md |
 | `is_urgent` | `BOOLEAN` | NO | `NOT NULL`, `DEFAULT false` | Chuyến khẩn cấp (BR-TR-03) |
 | `urgency_reason` | `TEXT` | YES | `CHECK (NOT is_urgent OR urgency_reason IS NOT NULL)` | Bắt buộc có nếu is_urgent=true |
-| `requires_level2` | `BOOLEAN` | NO | `NOT NULL`, `DEFAULT false` | Cần duyệt cấp 2 (BR-TR-04) — set bởi PolicyCheckEngine |
+| `requires_level2` | `BOOLEAN` | NO | `NOT NULL`, `DEFAULT false` | Cần duyệt cấp 2 (BR-TR-04) — `= approvalReasons.length > 0`, set bởi PolicyCheckEngine |
+| `approval_reasons` | `TEXT` | YES | — | JSON: `ApprovalReason[]` snapshot tại lúc submit (BR-TR-04/08, D-16). Bất biến sau khi `CLOSED`. Ghi đè khi resubmit. |
 | `submitted_at` | `TIMESTAMPTZ` | YES | — | Thời điểm nộp |
 | `approved_at` | `TIMESTAMPTZ` | YES | — | Thời điểm được duyệt cuối cùng |
 | `closed_at` | `TIMESTAMPTZ` | YES | — | Thời điểm đóng hồ sơ |
@@ -287,8 +288,8 @@ erDiagram
 
 | Rule | Cơ chế |
 |---|---|
-| BR-TR-01 | `hotel_cost_per_night` lưu để PolicyCheckEngine so với limit theo `employee.job_grade` |
-| BR-TR-02 | `per_diem_budget` lưu để PolicyCheckEngine so với `trip_days * PER_DIEM_RATE[destination_type]` |
+| BR-TR-01 | `hotel_cost_per_night` **không còn lưu từ client** (D-16); `jobGrade` của user dùng để tính Combined_Limit tại submit |
+| BR-TR-02 | `per_diem_budget` **không còn lưu từ client** (D-16); `destinationType` tự suy từ `destination` bằng `resolveDestinationType()` |
 | BR-TR-03 | `is_urgent = true` khi `departure_date - created_at < 3 working days`; `CHECK (NOT is_urgent OR urgency_reason IS NOT NULL)` đảm bảo có lý do |
 | BR-TR-06 | `immutableGuard` middleware chặn write khi `status = 'CLOSED'`; `CHECK` constraint tùy chọn bổ sung qua trigger |
 | Tính nhất quán budget | `CHECK (estimated_budget > 0)`, `CHECK (return_date >= departure_date)` |
@@ -320,16 +321,21 @@ CREATE INDEX idx_trips_employee_status ON trips(employee_id, status);
 
 **Snapshot design:** Bảng này là bản ghi bất biến. Nếu cần chạy lại policy check (ví dụ khi Employee chỉnh sửa trip ở trạng thái DRAFT), tạo record mới (replace), không update record cũ.
 
-**Cấu trúc JSON `violations`:**
+**Cấu trúc JSON `violations` (D-16):**
 ```json
 [
   {
-    "code": "POLICY_VIOLATION_ACCOMMODATION_OVER_BUDGET",
-    "detail": "Hotel 2,000,000 VNĐ/đêm vượt hạn mức Staff (1,000,000 VNĐ/đêm)",
+    "code": "COMBINED_COST_LIMIT_EXCEEDED",
+    "detail": "Vi phạm chính sách BR-TR-08: Ngân sách dự kiến 3.300.000 VNĐ vượt tổng hạn mức 3.200.000 VNĐ (Staff, 3 ngày / 2 đêm, TP.HCM)",
     "severity": "WARNING",
-    "rule": "BR-TR-01",
-    "limit": 1000000,
-    "actual": 2000000
+    "rule": "BR-TR-08",
+    "limit": 3200000,
+    "actual": 3300000,
+    "combinedLimit": 3200000,
+    "tripDays": 3,
+    "hotelNights": 2,
+    "jobGrade": "STAFF",
+    "destinationType": "TIER1_CITY"
   }
 ]
 ```

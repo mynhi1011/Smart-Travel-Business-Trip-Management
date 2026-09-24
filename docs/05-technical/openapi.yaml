@@ -321,23 +321,16 @@ components:
         - $ref: '#/components/schemas/TripSummary'
         - type: object
           properties:
-            hotelCostPerNight:
-              type: integer
-              nullable: true
-            hotelNights:
-              type: integer
-              nullable: true
-            perDiemBudget:
-              type: integer
-              nullable: true
-            transportBudget:
-              type: integer
-              nullable: true
-            otherBudget:
-              type: integer
-              nullable: true
             urgencyReason:
               type: string
+              nullable: true
+            approvalReasons:
+              type: array
+              description: "Snapshot lý do duyệt 2 cấp tại lúc submit (D-16). Rỗng nếu 1 cấp."
+              items:
+                $ref: '#/components/schemas/ApprovalReason'
+            level1Approval:
+              $ref: '#/components/schemas/Level1Approval'
               nullable: true
             policyCheckResult:
               $ref: '#/components/schemas/PolicyCheckResult'
@@ -360,11 +353,11 @@ components:
       required:
         - origin
         - destination
-        - destinationType
         - departureDate
         - returnDate
         - purpose
         - estimatedBudget
+      description: "D-16: destinationType và hotelCostPerNight/perDiemBudget không còn nhận từ client. Server tự tính destinationType từ destination."
       properties:
         origin:
           type: string
@@ -376,18 +369,16 @@ components:
           minLength: 1
           maxLength: 200
           example: Đà Nẵng
-        destinationType:
-          $ref: '#/components/schemas/DestinationType'
         departureDate:
           type: string
           format: date
           description: Phải >= ngày hôm nay
-          example: "2026-09-20"
+          example: "2026-10-01"
         returnDate:
           type: string
           format: date
           description: Phải >= departureDate
-          example: "2026-09-22"
+          example: "2026-10-03"
         purpose:
           type: string
           minLength: 10
@@ -395,26 +386,12 @@ components:
         estimatedBudget:
           type: integer
           minimum: 1
-          description: VND nguyên — > 0
-        hotelCostPerNight:
-          type: integer
-          minimum: 0
-          nullable: true
-        hotelNights:
-          type: integer
-          minimum: 0
-          nullable: true
-        perDiemBudget:
-          type: integer
-          minimum: 0
-          nullable: true
-        transportBudget:
-          type: integer
-          minimum: 0
-          nullable: true
-        otherBudget:
-          type: integer
-          minimum: 0
+          description: "Ngân sách dự kiến tổng chuyến đi (VND nguyên). Đây là Combined_Actual cho BR-TR-08."
+        urgencyReason:
+          type: string
+          minLength: 10
+          maxLength: 500
+          description: "Bắt buộc nếu workingDays < 3 (BR-TR-03)"
           nullable: true
 
     TripUpdateRequest:

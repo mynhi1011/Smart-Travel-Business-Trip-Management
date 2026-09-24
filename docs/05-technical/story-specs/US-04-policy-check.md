@@ -10,14 +10,15 @@
 Figma: _[Prototype URL]_ → Screen: **Trip Form — Policy Check Result Banner**
 
 ## Goal
-Hệ thống tự động chạy PolicyCheckEngine khi Employee nộp Trip Request, kiểm tra tổng hợp hạn mức lưu trú và phụ cấp (BR-TR-08), thời hạn gửi (BR-TR-03) và định tuyến duyệt cấp 2 nếu cần (BR-TR-04). Kết quả hiển thị trực quan trên giao diện.
+Hệ thống tự động chạy PolicyCheckEngine khi Employee nộp Trip Request. Kiểm tra: tổng hạn mức kết hợp BR-TR-08, thời hạn gửi BR-TR-03, ngưỡng ngân sách BR-TR-04. Tính `approvalReasons[]` snapshot. Kết quả hiển thị trực quan.
 
 ---
 
 ## Preconditions
 - Employee đã đăng nhập (role = `EMPLOYEE`), là chủ sở hữu trip.
 - Trip ở trạng thái `DRAFT`.
-- Trip có đủ thông tin: `destination`, `departureDate`, `returnDate`, `estimatedBudget`, `hotelCostPerNight`, `perDiemBudget`.
+- Trip có: `destination`, `departureDate`, `returnDate`, `estimatedBudget`.
+- **Không cần** `hotelCostPerNight`, `perDiemBudget` (đã xóa theo D-16).
 
 ---
 
@@ -26,16 +27,16 @@ Hệ thống tự động chạy PolicyCheckEngine khi Employee nộp Trip Reque
 1. Employee hoàn tất Trip Request và bấm **"Nộp yêu cầu"**.
 2. Client gọi `POST /api/v1/trips/:tripId/submit`.
 3. Server (trong 1 transaction):
-   a. Khoá row trip (`SELECT FOR UPDATE`).
-   b. Chạy `PolicyCheckEngine`:
-      - BR-TR-08: `(hotelCostPerNight × hotelNights) + perDiemBudget ≤ (HOTEL_LIMIT[jobGrade] × hotelNights) + (tripDays × RATE[destinationType])`; nếu vượt, tạo đúng một cảnh báo tổng hợp, không yêu cầu lý do. BR-TR-01 và BR-TR-02 chỉ cung cấp các mức thành phần.
-      - BR-TR-03: working days diff ≥ 3 hoặc `is_urgent = true`
-      - BR-TR-04: `estimatedBudget ≤ 20M AND violations.length === 0`
-   c. INSERT `policy_check_results` (snapshot bất biến).
-   d. UPDATE `trips.status = 'SUBMITTED'`, set `isUrgent`, `requiresLevel2`.
-   e. INSERT `audit_logs`.
-4. Server trả 200 với `{ status: "SUBMITTED", policyCheckResult: { passed: true, violations: [] } }`.
-5. Client hiển thị **banner xanh** "Policy Check: PASS — Yêu cầu đã được gửi đi.".
+   a. Khoá row trip.
+   b. Lấy `user.jobGrade` từ DB (không từ client).
+   c. Tự tính `destinationType = resolveDestinationType(destination)`.
+   d. Chạy `PolicyCheckEngine` (BR-TR-03, BR-TR-04, BR-TR-08).
+   e. Tính `approvalReasons = buildApprovalReasons(...)`.
+   f. INSERT/UPSERT `policy_check_results`.
+   g. UPDATE `trips`: `status = SUBMITTED`, `isUrgent`, `requiresLevel2`, `approvalReasons` (JSON).
+   h. INSERT `audit_logs`.
+4. Server trả 200 với `{ status, approvalReasons[], policyCheckResult, requiresLevel2 }`.
+5. Client hiển thị **banner xanh** "Yêu cầu đã được gửi" hoặc banner cảnh báo nếu có vi phạm.
 
 ---
 
@@ -43,37 +44,26 @@ Hệ thống tự động chạy PolicyCheckEngine khi Employee nộp Trip Reque
 
 | ID | Tình huống | Phản hồi hệ thống |
 |---|---|---|
-| E-01 | Tổng chi phí lưu trú và per diem vượt tổng hạn mức (BR-TR-08) | Tạo một cảnh báo tổng hợp; không yêu cầu lý do |
-| E-02 | Chỉ riêng khách sạn hoặc per diem vượt mức thành phần nhưng tổng kết hợp không vượt | Không cảnh báo theo BR-TR-01/02; không yêu cầu lý do |
-| E-03 | `is_urgent = true` (BR-TR-03) | `violations` có `URGENT_TRIP_NOTICE`, severity WARNING |
-| E-04 | `estimatedBudget > 20M` (BR-TR-04) | `requiresLevel2 = true`, `violations` có `POLICY_VIOLATION_BUDGET_THRESHOLD` |
-| E-05 | Nhiều vi phạm cùng lúc | Tất cả violations hiển thị; `requiresLevel2 = true` |
-| E-06 | Trip không phải DRAFT | `409 INVALID_STATE` |
-| E-07 | Trip không thuộc về user | `403 NOT_OWNER` |
-| E-08 | Token hết hạn | Auto refresh → retry |
-| E-09 | Lỗi server trong PolicyCheck | `500`, audit log ghi lỗi; trip không thay đổi status |
+| E-01 | `plannedBudget > Combined_Limit` (BR-TR-08) | Một cảnh báo `COMBINED_COST_LIMIT_EXCEEDED`; lý do trong `approvalReasons`; không chặn submit |
+| E-02 | `is_urgent = true` (BR-TR-03) | Lý do `URGENT_TRIP` trong `approvalReasons`; `requiresLevel2 = true` |
+| E-03 | `estimatedBudget > 20M` (BR-TR-04) | Lý do `BUDGET_OVER_THRESHOLD` trong `approvalReasons`; `requiresLevel2 = true` |
+| E-04 | Nhiều điều kiện cùng lúc | Tất cả lý do trong `approvalReasons`; `requiresLevel2 = true` |
+| E-05 | Trip không phải DRAFT | `409 INVALID_STATE` |
+| E-06 | Trip không thuộc về user | `403 NOT_OWNER` |
 
 ---
 
 ## Data Read / Write
 
 ### Read
-- `users` — lấy `jobGrade` để check BR-TR-01.
-- `trips` — lấy `hotelCostPerNight`, `hotelNights`, `perDiemBudget`, `estimatedBudget`, `departure_date`, `trip_days`, `destinationType`.
+- `users` — lấy `jobGrade` (BE, không từ client).
+- `trips` — lấy `destination`, `estimatedBudget`, `departureDate`, `returnDate`, `isUrgent`, `urgencyReason`.
 
 ### Write
-- `trips`: UPDATE `status = SUBMITTED`, `isUrgent`, `requiresLevel2`, `submittedAt`.
-- `policy_check_results`: INSERT (snapshot bất biến — không update sau đó).
+- `trips`: UPDATE `status`, `isUrgent`, `requiresLevel2`, `approvalReasons`, `submittedAt`.
+- `policy_check_results`: UPSERT (snapshot bất biến — UPSERT khi resubmit).
 - `audit_logs`: INSERT `TRIP_SUBMITTED`.
-- Notification: INSERT → emit SSE đến Manager.
-
-### DB Tables affected
-| Bảng | Operation | Ghi chú |
-|---|---|---|
-| `trips` | UPDATE | `status`, `is_urgent`, `requires_level2`, `submitted_at` |
-| `policy_check_results` | INSERT | Snapshot bất biến, UNIQUE trên `trip_id` (UPSERT nếu resubmit) |
-| `audit_logs` | INSERT | `action = TRIP_SUBMITTED` |
-| `notifications` | INSERT | → emit SSE → Manager |
+- `notifications`: INSERT → emit SSE đến Manager.
 
 ---
 
@@ -89,125 +79,66 @@ Hệ thống tự động chạy PolicyCheckEngine khi Employee nộp Trip Reque
   "status": "SUBMITTED",
   "isUrgent": false,
   "requiresLevel2": false,
-  "submittedAt": "2026-08-28T10:31:00Z",
+  "approvalReasons": [],
+  "submittedAt": "2026-09-24T10:31:00Z",
   "policyCheckResult": {
     "passed": true,
     "violations": [],
     "violationCount": 0,
-    "requiresLevel2Approval": false,
-    "checkedAt": "2026-08-28T10:31:00Z"
+    "requiresLevel2Approval": false
   }
 }
 ```
 
-**Response 200 — Vi phạm (vẫn submit được, nhưng cần L2):**
+**Response 200 — Vi phạm (vẫn submit được, cần L2):**
 ```json
 {
   "id": "uuid",
   "status": "SUBMITTED",
   "isUrgent": false,
   "requiresLevel2": true,
+  "approvalReasons": [
+    {
+      "code": "COMBINED_COST_LIMIT_EXCEEDED",
+      "title": "Vượt tổng hạn mức lưu trú và phụ cấp",
+      "detail": "Vi phạm chính sách: Ngân sách dự kiến 3.300.000 VNĐ vượt tổng hạn mức 3.200.000 VNĐ (Staff, 3 ngày / 2 đêm, Hà Nội / TP.HCM / Đà Nẵng).",
+      "data": { "plannedBudget": 3300000, "combinedLimit": 3200000, "tripDays": 3, "hotelNights": 2, "jobGrade": "STAFF", "destinationType": "TIER1_CITY" }
+    }
+  ],
   "policyCheckResult": {
     "passed": false,
-    "violations": [
-      {
-        "code": "POLICY_VIOLATION_COMBINED_LIMIT_EXCEEDED",
-        "detail": "Tổng chi phí lưu trú và phụ cấp vượt tổng hạn mức kết hợp BR-TR-08; không yêu cầu nhập lý do",
-        "severity": "WARNING",
-        "rule": "BR-TR-08",
-        "limit": 0000000,
-        "actual": 0000000
-      }
-    ],
+    "violations": [{ "code": "COMBINED_COST_LIMIT_EXCEEDED", "severity": "WARNING", "rule": "BR-TR-08", "limit": 3200000, "actual": 3300000 }],
     "violationCount": 1,
     "requiresLevel2Approval": true
   }
 }
 ```
 
-**Errors:** `401`, `403`, `404`, `409 INVALID_STATE`, `500`
-
 ---
 
-## Authorization
-
-| Role | Quyền |
-|---|---|
-| `EMPLOYEE` | ✅ Submit trip của mình |
-| Khác | ❌ 403 |
-
----
-
-## Validation / Business Rules
+## Validation / Business Rules (D-16)
 
 | Rule | Code | Logic | `requiresLevel2` |
 |---|---|---|---|
-| Combined accommodation + per diem | `POLICY_VIOLATION_COMBINED_LIMIT_EXCEEDED` | `(hotelCostPerNight × hotelNights) + perDiemBudget > (HOTEL_LIMIT[jobGrade] × hotelNights) + (tripDays × RATE[destType])` | ✅ |
 | Advance notice | `URGENT_TRIP_NOTICE` | `workingDaysDiff < 3` | ✅ |
 | Budget threshold | `POLICY_VIOLATION_BUDGET_THRESHOLD` | `estimatedBudget > 20_000_000` | ✅ |
+| Combined cost | `COMBINED_COST_LIMIT_EXCEEDED` | `plannedBudget > (HOTEL_LIMIT[jobGrade] × hotelNights) + (tripDays × PER_DIEM_RATE[destType])` | ✅ |
 
-**Hotel Limits (BR-TR-01):**
-```
-STAFF         → 1.000.000 VNĐ/đêm
-MANAGER_GRADE → 1.800.000 VNĐ/đêm
-DIRECTOR      → 3.000.000 VNĐ/đêm
-```
-
-**Per Diem Rates (BR-TR-02):**
-```
-TIER1_CITY → 400.000 VNĐ/ngày
-OTHER      → 300.000 VNĐ/ngày
-```
-
-**Transaction scope:** Toàn bộ PolicyCheck + UPDATE trips + INSERT policy_check_results + INSERT audit_logs nằm trong 1 `prisma.$transaction`.
+`requiresLevel2 = approvalReasons.length > 0` — nguồn sự thật duy nhất.
 
 ---
 
-## Observability / Logging
-
-| Event | Level | Nội dung |
-|---|---|---|
-| PolicyCheck chạy | `info` | `{ tripId, employeeId, jobGrade, destinationType }` |
-| PolicyCheck pass | `info` | `{ action: "POLICY_CHECK_PASS", tripId }` |
-| PolicyCheck violation | `warn` | `{ action: "POLICY_CHECK_VIOLATION", tripId, violations: [...], requiresLevel2 }` |
-| Trip submitted | `info` | `{ action: "TRIP_SUBMITTED", tripId, status: "SUBMITTED", requiresLevel2 }` |
-| Notification sent | `info` | `{ action: "NOTIFICATION_SENT", recipientId: managerId, type: "PENDING_LEVEL1_APPROVAL" }` |
-
----
-
-## Test Plan
+## Test Plan (cập nhật D-16)
 
 | ID | Loại | Mô tả | Expected |
 |---|---|---|---|
-| T4.1 | AC 4.1 | Không vi phạm (hotel=800k STAFF, per diem đúng, 7 ngày trước) | `passed=true`, banner xanh |
-| T4.2 | AC 4.2 | Hotel vượt mức thành phần nhưng tổng kết hợp không vượt hạn mức | Không cảnh báo tổng hợp |
-| T4.3 | AC 4.2 | Per diem vượt mức thành phần nhưng tổng kết hợp không vượt hạn mức | Không cảnh báo tổng hợp |
-| T4.4 | AC 4.2 | `estimatedBudget=25000000` (> 20M) | `POLICY_VIOLATION_BUDGET_THRESHOLD`, `requiresLevel2=true` |
-| T4.5 | AC 4.2 | `is_urgent=true` | `URGENT_TRIP_NOTICE`, severity=WARNING |
-| T4.6 | Combo | Tổng kết hợp vượt hạn mức và dự toán > 20M | Cảnh báo tổng hợp BR-TR-08; định tuyến L2 do ngưỡng ngân sách BR-TR-04 |
-| T4.7 | Error E-06 | Submit trip đang SUBMITTED | `409 INVALID_STATE` |
+| T4.1 | Happy | Staff/TPHCM/3ngày/2M — không vi phạm | `passed=true`, `approvalReasons=[]`, `requiresLevel2=false` |
+| T4.2 | BR-TR-08 | Staff/TPHCM/3ngày/3.3M — vượt 3.2M | `COMBINED_COST_LIMIT_EXCEEDED`, `requiresLevel2=true` |
+| T4.3 | BR-TR-08 | Staff/TPHCM/3ngày/3.2M — đúng hạn mức | không cảnh báo |
+| T4.4 | BR-TR-04 | `estimatedBudget=25M` | `POLICY_VIOLATION_BUDGET_THRESHOLD`, `requiresLevel2=true` |
+| T4.5 | BR-TR-03 | `is_urgent=true` | `URGENT_TRIP_NOTICE`, `requiresLevel2=true` |
+| T4.6 | Combo | Cả 3 điều kiện | 3 approvalReasons, `requiresLevel2=true` |
+| T4.7 | Error | Submit trip đang SUBMITTED | `409 INVALID_STATE` |
 | T4.8 | Auth | MANAGER submit trip của employee khác | `403` |
-| T4.9 | Transaction | PolicyCheck lỗi giữa chừng | Trip giữ nguyên DRAFT, không có policy_check_result |
-| T4.10 | Audit | Sau T4.1, query `audit_logs` | Record `TRIP_SUBMITTED` tồn tại |
-| T4.11 | Snapshot | Sau submit, sửa `estimatedBudget` của trip | `policy_check_results.violations` không thay đổi |
-| T4.12 | Perf | Submit và nhận kết quả | ≤ 1s (NFR-TR-01) |
-
-**AC Coverage:** AC 4.1 → T4.1 ✅ | AC 4.2 → T4.2–T4.6 ✅
-
----
-
-## Definition of Done
-
-- [ ] `POST /trips/:tripId/submit` chạy PolicyCheckEngine server-side
-- [ ] Cảnh báo tổng hợp BR-TR-08 và các điều kiện BR-TR-03, BR-TR-04 hoạt động đúng
-- [ ] `requiresLevel2` được set đúng theo kết quả PolicyCheck + budget
-- [ ] `policy_check_results` là snapshot bất biến sau submit
-- [ ] Toàn bộ trong 1 DB transaction (NFR-TR-05)
-- [ ] Notification gửi đến Manager sau submit (REQ-TR-11)
-- [ ] `audit_logs` có record `TRIP_SUBMITTED` (NFR-TR-04)
-- [ ] 12 test cases T4.1–T4.12 pass
-- [ ] Response ≤ 1s (NFR-TR-01)
-
-> **⚠️ Cần xác nhận trước khi code:**
-> 1. Employee có thể submit trip dù có vi phạm không? (Hiện tại: có — vi phạm không block submit, chỉ route sang L2)
-> 2. Nếu trip đã SUBMITTED, có cho phép submit lại (resubmit sau khi sửa DRAFT) không?
+| T4.9 | Snapshot | Sau submit, sửa `estimatedBudget` | `policy_check_results` không thay đổi |
+| T4.10 | Snapshot | Trip CLOSED: `approvalReasons` không thay đổi | Bất biến (BR-TR-06) |

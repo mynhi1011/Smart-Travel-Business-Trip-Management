@@ -51,12 +51,12 @@ export async function updateTrip(req: Request, res: Response, next: NextFunction
   try {
     if (!req.user) { next(Errors.UNAUTHORIZED()); return; }
     // Tái dùng inner object schema (không superRefine) để partial hoạt động
-    const { origin, destination, destinationType, departureDate, returnDate,
-            purpose, estimatedBudget, hotelCostPerNight, hotelNights,
-            perDiemBudget, transportBudget, otherBudget, urgencyReason } = req.body as Record<string, unknown>;
-    const partial = { origin, destination, destinationType, departureDate, returnDate,
-                      purpose, estimatedBudget, hotelCostPerNight, hotelNights,
-                      perDiemBudget, transportBudget, otherBudget, urgencyReason };
+    // D-16: hotelCostPerNight, hotelNights, perDiemBudget, transportBudget, otherBudget
+    // không còn được nhận từ client nữa.
+    const { origin, destination, departureDate, returnDate,
+            purpose, estimatedBudget, urgencyReason } = req.body as Record<string, unknown>;
+    const partial = { origin, destination, departureDate, returnDate,
+                      purpose, estimatedBudget, urgencyReason };
     // Strip undefined
     const data = Object.fromEntries(Object.entries(partial).filter(([, v]) => v !== undefined));
     const trip = await tripService.updateTrip(req.params['id'] ?? '', req.user.id, data as Parameters<typeof tripService.updateTrip>[2]);

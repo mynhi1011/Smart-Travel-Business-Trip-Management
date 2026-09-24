@@ -4,16 +4,23 @@
  * Quản lý vòng đời Trip Request theo state machine (architecture.md §9).
  * Mọi state transition được bọc trong prisma.$transaction().
  * Sau mỗi transition: gọi logAudit() và createNotification().
+ *
+ * Thay đổi (D-16):
+ *   - createTrip: bỏ hotel/perDiem/transport/other fields
+ *   - destinationType: tự suy ra từ destination (resolveDestinationType)
+ *   - submitTrip: tính approvalReasons snapshot + lưu vào Trip
+ *   - getTripById/getAllTrips: trả approvalReasons + level1Approval
  */
 
 import prisma from '../prisma/client';
 import { logAudit, AuditActions } from './audit.service';
 import { createNotification } from './notification.service';
 import { countWorkingDays, runPolicyCheck, requiresLevel2FromViolations } from './policy.service';
+import { resolveDestinationType, buildApprovalReasons } from './policyRules';
+import type { ApprovalReason } from './policyRules';
 import { routeApproval } from './approval.service';
 import { calculateTripDays } from '../utils/date.utils';
-import { checkPerDiemWarning } from '../utils/validators/trip.validator';
-import type { CreateTripInput, PerDiemWarning } from '../utils/validators/trip.validator';
+import type { CreateTripInput } from '../utils/validators/trip.validator';
 import { Errors } from '../middlewares/error-handler';
 
 // ─── Valid Trip Status Transitions ────────────────────────────────────────────
@@ -24,7 +31,7 @@ export const VALID_TRANSITIONS: Record<string, string[]> = {
   PENDING_ADMIN_APPROVAL: ['APPROVED', 'REJECTED'],
   APPROVED:               ['ONGOING'],
   ONGOING:                ['EXPENSE_DRAFT'],
-  EXPENSE_DRAFT:          ['EXPENSE_SUBMITTED', 'MANAGER_REAPPROVE'], // BR-TR-05: >10% (giá trị thô) → Manager duyệt bổ sung ngay khi submit
+  EXPENSE_DRAFT:          ['EXPENSE_SUBMITTED', 'MANAGER_REAPPROVE'],
   EXPENSE_SUBMITTED:      ['EXPENSE_APPROVED', 'EXPENSE_REJECTED'],
   EXPENSE_APPROVED:       ['CLOSED'],
   EXPENSE_REJECTED:       ['EXPENSE_DRAFT'],
@@ -39,28 +46,24 @@ function computeTripDays(dep: Date, ret: Date): number {
 }
 
 // ─── Helper: generate human-readable Trip Code ───────────────────────────────
-/**
- * generateTripCode — Sinh mã Trip dạng TR-YYYY-NNNN
- *
- * Đếm số trip đã tạo trong năm hiện tại (theo created_at) để lấy sequence number.
- * Atomic trong transaction → không race condition khi concurrent creates.
- *
- * Ví dụ: TR-2026-0001, TR-2026-0042, TR-2027-0001
- */
 async function generateTripCode(): Promise<string> {
-  const year = new Date().getFullYear();
+  const year      = new Date().getFullYear();
   const yearStart = new Date(`${year}-01-01T00:00:00.000Z`);
   const yearEnd   = new Date(`${year + 1}-01-01T00:00:00.000Z`);
 
   const count = await prisma.trip.count({
-    where: {
-      createdAt: { gte: yearStart, lt: yearEnd },
-    },
+    where: { createdAt: { gte: yearStart, lt: yearEnd } },
   });
 
-  // sequence = count + 1 (next trip in this year)
   const seq = count + 1;
   return `TR-${year}-${String(seq).padStart(4, '0')}`;
+}
+
+// ─── Helper: parse approvalReasons JSON safely ────────────────────────────────
+function parseApprovalReasons(raw: string | null | undefined): ApprovalReason[] {
+  if (!raw) return [];
+  try { return JSON.parse(raw) as ApprovalReason[]; }
+  catch { return []; }
 }
 
 // ─── Helper: format trip for response ────────────────────────────────────────
@@ -68,22 +71,31 @@ function formatTrip(trip: Record<string, unknown>, tripDays?: number) {
   const dep  = trip['departureDate'] as Date;
   const ret  = trip['returnDate']    as Date;
   const days = tripDays ?? computeTripDays(dep, ret);
-  return { ...trip, tripDays: days };
+
+  // Parse approvalReasons JSON string → array
+  const approvalReasonsRaw = trip['approvalReasons'] as string | null | undefined;
+  const approvalReasonsParsed = parseApprovalReasons(approvalReasonsRaw);
+
+  return {
+    ...trip,
+    tripDays: days,
+    approvalReasons: approvalReasonsParsed,
+  };
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface CreateTripResult {
   trip: {
-    id: string; tripCode: string; employeeId: string; origin: string; destination: string;
-    destinationType: string; departureDate: Date; returnDate: Date; tripDays: number;
-    purpose: string; estimatedBudget: number; hotelCostPerNight: number | null;
-    hotelNights: number | null; perDiemBudget: number | null;
-    transportBudget: number | null; otherBudget: number | null;
+    id: string; tripCode: string; employeeId: string; origin: string;
+    destination: string; destinationType: string;
+    departureDate: Date; returnDate: Date; tripDays: number;
+    purpose: string; estimatedBudget: number;
     status: string; isUrgent: boolean; urgencyReason: string | null;
-    requiresLevel2: boolean; createdAt: Date; updatedAt: Date;
+    requiresLevel2: boolean; approvalReasons: ApprovalReason[];
+    createdAt: Date; updatedAt: Date;
   };
-  warnings: PerDiemWarning[];
+  warnings: never[]; // Không còn soft warnings (D-16)
 }
 
 // ─── createTrip ───────────────────────────────────────────────────────────────
@@ -96,6 +108,9 @@ export async function createTrip(
   const returnDate    = new Date(data.returnDate    + 'T00:00:00.000Z');
   const tripDays = computeTripDays(departureDate, returnDate);
 
+  // destinationType tự suy ra từ destination (D-16: không nhận từ client)
+  const destinationType = resolveDestinationType(data.destination);
+
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const workingDaysAhead = countWorkingDays(today, departureDate);
   const isUrgent = workingDaysAhead < 3;
@@ -104,7 +119,9 @@ export async function createTrip(
     const reason = data.urgencyReason?.trim();
     if (!reason || reason.length < 10) {
       throw Errors.VALIDATION_ERROR({
-        fieldErrors: { urgencyReason: [`Urgent trip: phai co ly do khan cap toi thieu 10 ky tu (con ${workingDaysAhead} ngay lam viec)`] },
+        fieldErrors: {
+          urgencyReason: [`Chuyến đi khẩn cấp: bắt buộc nhập lý do tối thiểu 10 ký tự (còn ${workingDaysAhead} ngày làm việc)`],
+        },
         formErrors: [],
       });
     }
@@ -112,35 +129,33 @@ export async function createTrip(
 
   const trip = await prisma.trip.create({
     data: {
-      tripCode: await generateTripCode(),
+      tripCode:        await generateTripCode(),
       employeeId,
-      origin: data.origin.trim(), destination: data.destination.trim(),
-      destinationType: data.destinationType,
-      departureDate, returnDate,
-      purpose: data.purpose.trim(), estimatedBudget: data.estimatedBudget,
-      hotelCostPerNight: data.hotelCostPerNight ?? null,
-      hotelNights:       data.hotelNights       ?? null,
-      perDiemBudget:     data.perDiemBudget     ?? null,
-      transportBudget:   data.transportBudget   ?? null,
-      otherBudget:       data.otherBudget       ?? null,
-      status: 'DRAFT', isUrgent,
-      urgencyReason: isUrgent ? (data.urgencyReason?.trim() ?? null) : null,
-      requiresLevel2: false,
+      origin:          data.origin.trim(),
+      destination:     data.destination.trim(),
+      destinationType,
+      departureDate,
+      returnDate,
+      purpose:         data.purpose.trim(),
+      estimatedBudget: data.estimatedBudget,
+      status:          'DRAFT',
+      isUrgent,
+      urgencyReason:   isUrgent ? (data.urgencyReason?.trim() ?? null) : null,
+      requiresLevel2:  false,
+      approvalReasons: null,
     },
   });
 
-  const warnings: PerDiemWarning[] = [];
-  const pw = checkPerDiemWarning(data.perDiemBudget, data.destinationType, tripDays);
-  if (pw) warnings.push(pw);
-
-  await logAudit({ userId: employeeId, entityType: 'TRIP', entityId: trip.id,
+  await logAudit({
+    userId: employeeId, entityType: 'TRIP', entityId: trip.id,
     action: AuditActions.TRIP_CREATED, previousState: null, newState: 'DRAFT',
-    metadata: { isUrgent, estimatedBudget: data.estimatedBudget, tripDays },
-    ipAddress: ipAddress ?? null });
+    metadata: { isUrgent, estimatedBudget: data.estimatedBudget, tripDays, destinationType },
+    ipAddress: ipAddress ?? null,
+  });
 
   return {
-    trip: { ...trip, tripDays },
-    warnings,
+    trip: { ...trip, tripDays, approvalReasons: [] },
+    warnings: [],
   };
 }
 
@@ -154,16 +169,12 @@ export async function getAllTrips(
   const limit = Math.min(100, filters.limit ?? 20);
   const skip  = (page - 1) * limit;
 
-  // RBAC where clause
   let where: Record<string, unknown> = {};
   if (userRole === 'EMPLOYEE') {
     where = { employeeId: userId };
   } else if (userRole === 'MANAGER') {
-    // Manager thấy trips của subordinates (employee.managerId = userId)
     where = { employee: { managerId: userId } };
   }
-  // TRAVEL_ADMIN, FINANCE, ADMIN thấy tất cả
-
   if (filters.status) where['status'] = filters.status;
 
   const orderBy: Record<string, string> = {};
@@ -173,15 +184,33 @@ export async function getAllTrips(
 
   const [trips, total] = await prisma.$transaction([
     prisma.trip.findMany({
-      where, skip, take: limit,
-      orderBy,
-      include: { employee: { select: { id: true, name: true, department: true, jobGrade: true } } },
+      where, skip, take: limit, orderBy,
+      include: {
+        employee: { select: { id: true, name: true, department: true, jobGrade: true } },
+        approvalRecords: {
+          where: { approvalLevel: 'LEVEL_1', action: 'APPROVED' },
+          include: { approver: { select: { id: true, name: true } } },
+          take: 1,
+          orderBy: { actedAt: 'asc' },
+        },
+      },
     }),
     prisma.trip.count({ where }),
   ]);
 
   return {
-    trips: trips.map(t => formatTrip(t as unknown as Record<string, unknown>)),
+    trips: trips.map(t => {
+      const formatted = formatTrip(t as unknown as Record<string, unknown>);
+      const l1 = (t.approvalRecords as Array<{ approver: { name: string }; comment: string | null; actedAt: Date }>)[0];
+      return {
+        ...formatted,
+        level1Approval: l1 ? {
+          approverName: l1.approver.name,
+          approvedAt:   l1.actedAt,
+          comment:      l1.comment,
+        } : null,
+      };
+    }),
     total,
   };
 }
@@ -197,7 +226,10 @@ export async function getTripById(
     include: {
       employee:          { select: { id: true, name: true, department: true, jobGrade: true, managerId: true } },
       policyCheckResult: true,
-      approvalRecords:   { include: { approver: { select: { id: true, name: true, role: true } } }, orderBy: { actedAt: 'asc' } },
+      approvalRecords:   {
+        include: { approver: { select: { id: true, name: true, role: true } } },
+        orderBy: { actedAt: 'asc' },
+      },
       expense:           { include: { items: true } },
       itineraryItems:    { orderBy: [{ dayNumber: 'asc' }, { sortOrder: 'asc' }] },
     },
@@ -205,7 +237,6 @@ export async function getTripById(
 
   if (!trip) throw Errors.TRIP_NOT_FOUND();
 
-  // Ownership / access check
   const emp = trip.employee as { managerId: string | null };
   const canAccess =
     userRole === 'TRAVEL_ADMIN' || userRole === 'FINANCE' || userRole === 'ADMIN' ||
@@ -214,7 +245,29 @@ export async function getTripById(
 
   if (!canAccess) throw Errors.FORBIDDEN();
 
-  return formatTrip(trip as unknown as Record<string, unknown>);
+  // Lấy level1Approval từ approval_records
+  const l1Record = (trip.approvalRecords as Array<{
+    approvalLevel: string; action: string;
+    approver: { name: string }; comment: string | null; actedAt: Date;
+  }>).find(r => r.approvalLevel === 'LEVEL_1' && r.action === 'APPROVED');
+
+  const formatted = formatTrip(trip as unknown as Record<string, unknown>);
+
+  // Parse violations JSON trong policyCheckResult
+  const pcr = trip.policyCheckResult ? {
+    ...trip.policyCheckResult,
+    violations: JSON.parse((trip.policyCheckResult as { violations: string }).violations ?? '[]'),
+  } : null;
+
+  return {
+    ...formatted,
+    policyCheckResult: pcr,
+    level1Approval: l1Record ? {
+      approverName: l1Record.approver.name,
+      approvedAt:   l1Record.actedAt,
+      comment:      l1Record.comment,
+    } : null,
+  };
 }
 
 // ─── updateTrip ───────────────────────────────────────────────────────────────
@@ -224,35 +277,39 @@ export async function updateTrip(
   data: Partial<CreateTripInput>
 ): Promise<unknown> {
   const trip = await prisma.trip.findUnique({ where: { id: tripId } });
-  if (!trip)                  throw Errors.TRIP_NOT_FOUND();
+  if (!trip)                    throw Errors.TRIP_NOT_FOUND();
   if (trip.employeeId !== userId) throw Errors.FORBIDDEN();
   if (trip.status !== 'DRAFT')    throw Errors.INVALID_STATUS_TRANSITION(trip.status, 'DRAFT (required for edit)');
 
   // Re-compute isUrgent nếu dates thay đổi
   let isUrgent = trip.isUrgent;
+  let destinationType = trip.destinationType;
+
   if (data.departureDate) {
-    const dep  = new Date(data.departureDate + 'T00:00:00.000Z');
+    const dep   = new Date(data.departureDate + 'T00:00:00.000Z');
     const today = new Date(); today.setHours(0, 0, 0, 0);
     isUrgent = countWorkingDays(today, dep) < 3;
+  }
+
+  // Re-compute destinationType nếu destination thay đổi
+  if (data.destination) {
+    destinationType = resolveDestinationType(data.destination);
   }
 
   const updated = await prisma.trip.update({
     where: { id: tripId },
     data: {
-      ...(data.origin           !== undefined && { origin:            data.origin.trim() }),
-      ...(data.destination      !== undefined && { destination:       data.destination.trim() }),
-      ...(data.destinationType  !== undefined && { destinationType:   data.destinationType }),
-      ...(data.departureDate    !== undefined && { departureDate:     new Date(data.departureDate + 'T00:00:00.000Z') }),
-      ...(data.returnDate       !== undefined && { returnDate:        new Date(data.returnDate    + 'T00:00:00.000Z') }),
-      ...(data.purpose          !== undefined && { purpose:           data.purpose.trim() }),
-      ...(data.estimatedBudget  !== undefined && { estimatedBudget:   data.estimatedBudget }),
-      ...(data.hotelCostPerNight !== undefined && { hotelCostPerNight: data.hotelCostPerNight }),
-      ...(data.hotelNights      !== undefined && { hotelNights:       data.hotelNights }),
-      ...(data.perDiemBudget    !== undefined && { perDiemBudget:     data.perDiemBudget }),
-      ...(data.transportBudget  !== undefined && { transportBudget:   data.transportBudget }),
-      ...(data.otherBudget      !== undefined && { otherBudget:       data.otherBudget }),
-      ...(data.urgencyReason    !== undefined && { urgencyReason:     data.urgencyReason }),
+      ...(data.origin        !== undefined && { origin:          data.origin.trim() }),
+      ...(data.destination   !== undefined && { destination:     data.destination.trim(), destinationType }),
+      ...(data.departureDate !== undefined && { departureDate:   new Date(data.departureDate + 'T00:00:00.000Z') }),
+      ...(data.returnDate    !== undefined && { returnDate:      new Date(data.returnDate    + 'T00:00:00.000Z') }),
+      ...(data.purpose       !== undefined && { purpose:         data.purpose.trim() }),
+      ...(data.estimatedBudget !== undefined && { estimatedBudget: data.estimatedBudget }),
+      ...(data.urgencyReason !== undefined && { urgencyReason:   data.urgencyReason }),
       isUrgent,
+      // Reset approvalReasons snapshot khi trip ở DRAFT và bị sửa
+      approvalReasons: null,
+      requiresLevel2:  false,
     },
   });
 
@@ -262,9 +319,9 @@ export async function updateTrip(
 // ─── deleteTrip ───────────────────────────────────────────────────────────────
 export async function deleteTrip(tripId: string, userId: string): Promise<void> {
   const trip = await prisma.trip.findUnique({ where: { id: tripId } });
-  if (!trip)                      throw Errors.TRIP_NOT_FOUND();
-  if (trip.employeeId !== userId)     throw Errors.FORBIDDEN();
-  if (trip.status !== 'DRAFT')        throw Errors.INVALID_STATUS_TRANSITION(trip.status, 'DELETE (only DRAFT)');
+  if (!trip)                    throw Errors.TRIP_NOT_FOUND();
+  if (trip.employeeId !== userId) throw Errors.FORBIDDEN();
+  if (trip.status !== 'DRAFT')    throw Errors.INVALID_STATUS_TRANSITION(trip.status, 'DELETE (only DRAFT)');
 
   await prisma.trip.delete({ where: { id: tripId } });
 }
@@ -286,7 +343,7 @@ export async function startTrip(
 
   const updated = await prisma.trip.update({
     where: { id: tripId },
-    data: { status: 'ONGOING' },
+    data:  { status: 'ONGOING' },
   });
 
   await logAudit({
@@ -315,7 +372,7 @@ export async function endTrip(
 
   const updated = await prisma.trip.update({
     where: { id: tripId },
-    data: { status: 'EXPENSE_DRAFT' },
+    data:  { status: 'EXPENSE_DRAFT' },
   });
 
   await logAudit({
@@ -334,52 +391,69 @@ export async function submitTrip(
   ipAddress?: string
 ): Promise<unknown> {
   // ── Phase 1: DB transaction (lock → policy check → update) ──────────────────
-  // logAudit + createNotification di chuyển ra NGOÀI transaction
-  // để tránh Prisma interactive transaction timeout (default 5s)
-  const { updatedTrip, policyResult, managerId } = await prisma.$transaction(async (tx) => {
+  const { updatedTrip, policyResult, approvalReasons, managerId } = await prisma.$transaction(async (tx) => {
     // Lock row
     const trips = await tx.$queryRaw<Array<{
       id: string; status: string; employee_id: string;
-      estimated_budget: number; hotel_cost_per_night: number | null;
-      per_diem_budget: number | null; departure_date: Date; return_date: Date;
-      created_at: Date; destination_type: string; is_urgent: boolean; hotel_nights: number | null;
+      estimated_budget: number;
+      departure_date: Date; return_date: Date;
+      created_at: Date; destination: string; destination_type: string;
+      is_urgent: boolean; urgency_reason: string | null;
     }>>`SELECT * FROM trips WHERE id = ${tripId} LIMIT 1`;
-    const trip = trips[0];
-    if (!trip)                          throw Errors.TRIP_NOT_FOUND();
-    if (trip.employee_id !== userId)    throw Errors.FORBIDDEN();
-    if (trip.status !== 'DRAFT')        throw Errors.INVALID_STATUS_TRANSITION(trip.status, 'SUBMITTED');
 
-    const emp = await tx.user.findUnique({ where: { id: userId }, select: { jobGrade: true, managerId: true } });
+    const trip = trips[0];
+    if (!trip)                       throw Errors.TRIP_NOT_FOUND();
+    if (trip.employee_id !== userId) throw Errors.FORBIDDEN();
+    if (trip.status !== 'DRAFT')     throw Errors.INVALID_STATUS_TRANSITION(trip.status, 'SUBMITTED');
+
+    const emp = await tx.user.findUnique({
+      where: { id: userId },
+      select: { jobGrade: true, managerId: true },
+    });
     const jobGrade  = emp?.jobGrade  ?? 'STAFF';
 
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const depDate = new Date(trip.departure_date);
     const retDate = new Date(trip.return_date);
     const tripDays = computeTripDays(depDate, retDate);
-    const wDays = countWorkingDays(today, depDate);
+    const wDays    = countWorkingDays(today, depDate);
 
+    // Chạy PolicyCheck (BR-TR-03/04/08)
     const policyResult = runPolicyCheck({
       jobGrade,
-      destinationType:   trip.destination_type,
-      estimatedBudget:   trip.estimated_budget,
-      hotelCostPerNight: trip.hotel_cost_per_night ?? undefined,
-      perDiemBudget:     trip.per_diem_budget      ?? undefined,
+      destination:     trip.destination,
+      estimatedBudget: trip.estimated_budget,
       tripDays,
-      departureDate: depDate,
-      createdAt:     new Date(trip.created_at),
+      departureDate:   depDate,
+      returnDate:      retDate,
+      createdAt:       new Date(trip.created_at),
+    });
+
+    // Tính approvalReasons snapshot — CÙNG logic với policyResult
+    const approvalReasons = buildApprovalReasons({
+      isUrgent:        wDays < 3,
+      urgencyReason:   trip.urgency_reason,
+      estimatedBudget: trip.estimated_budget,
+      startDate:       depDate,
+      endDate:         retDate,
+      jobGrade,
+      destination:     trip.destination,
     });
 
     const violationsJson = JSON.stringify(policyResult.violations);
+    const approvalReasonsJson = JSON.stringify(approvalReasons);
+
     await tx.policyCheckResult.upsert({
       where:  { tripId },
       create: {
-        tripId, passed: policyResult.passed,
+        tripId,
+        passed:                 policyResult.passed,
         violations:             violationsJson,
         violationCount:         policyResult.violationCount,
         requiresLevel2Approval: policyResult.requiresLevel2Approval,
       },
       update: {
-        passed: policyResult.passed,
+        passed:                 policyResult.passed,
         violations:             violationsJson,
         violationCount:         policyResult.violationCount,
         requiresLevel2Approval: policyResult.requiresLevel2Approval,
@@ -389,38 +463,55 @@ export async function submitTrip(
     const updatedTrip = await tx.trip.update({
       where: { id: tripId },
       data: {
-        status:         'SUBMITTED',
-        isUrgent:       wDays < 3,
-        requiresLevel2: policyResult.requiresLevel2Approval,
-        submittedAt:    new Date(),
+        status:          'SUBMITTED',
+        isUrgent:        wDays < 3,
+        requiresLevel2:  policyResult.requiresLevel2Approval,
+        approvalReasons: approvalReasonsJson,
+        submittedAt:     new Date(),
       },
       include: { policyCheckResult: true },
     });
 
-    return { updatedTrip, policyResult, managerId: emp?.managerId ?? null };
+    return {
+      updatedTrip, policyResult, approvalReasons,
+      managerId: emp?.managerId ?? null,
+    };
   });
 
-  // ── Phase 2: Side effects ngoài transaction (audit + notification) ───────────
-  await logAudit({ userId, entityType: 'TRIP', entityId: tripId,
+  // ── Phase 2: Side effects ngoài transaction ───────────────────────────────
+  await logAudit({
+    userId, entityType: 'TRIP', entityId: tripId,
     action: AuditActions.TRIP_SUBMITTED, previousState: 'DRAFT', newState: 'SUBMITTED',
-    metadata: { policyPassed: policyResult.passed, violationCount: policyResult.violationCount },
-    ipAddress: ipAddress ?? null });
+    metadata: {
+      policyPassed:    policyResult.passed,
+      violationCount:  policyResult.violationCount,
+      requiresLevel2:  policyResult.requiresLevel2Approval,
+      approvalReasons: approvalReasons.map(r => r.code),
+    },
+    ipAddress: ipAddress ?? null,
+  });
 
   if (managerId) {
-    await createNotification({ recipientId: managerId, type: 'PENDING_LEVEL1_APPROVAL',
-      message: 'Yeu cau cong tac moi can phe duyet cap 1.',
-      referenceId: tripId, referenceType: 'TRIP' });
+    await createNotification({
+      recipientId:   managerId,
+      type:          'PENDING_LEVEL1_APPROVAL',
+      message:       'Yêu cầu công tác mới cần phê duyệt cấp 1.',
+      referenceId:   tripId,
+      referenceType: 'TRIP',
+    });
   }
 
   // Parse violations string → array trước khi trả về
   const policyCheckResult = updatedTrip.policyCheckResult ? {
     ...updatedTrip.policyCheckResult,
-    violations: JSON.parse(updatedTrip.policyCheckResult.violations as string ?? '[]'),
+    violations: JSON.parse((updatedTrip.policyCheckResult as { violations: string }).violations ?? '[]'),
   } : null;
 
   return {
     ...formatTrip(updatedTrip as unknown as Record<string, unknown>),
     policyCheckResult,
+    approvalReasons,
+    level1Approval: null,
   };
 }
 
@@ -432,61 +523,66 @@ export async function approveTrip(
   comment?: string,
   ipAddress?: string
 ): Promise<unknown> {
-  // ── Phase 1: DB writes trong transaction (nhanh) ─────────────────────────
   const { updated, newStatus, auditAction, employeeId } = await prisma.$transaction(async (tx) => {
     const trip = await tx.trip.findUnique({
       where: { id: tripId },
-      include: { policyCheckResult: true, employee: { select: { id: true, managerId: true } } },
+      include: {
+        policyCheckResult: true,
+        employee: { select: { id: true, managerId: true } },
+      },
     });
     if (!trip) throw Errors.TRIP_NOT_FOUND();
 
-    const isManagerApprove      = userRole === 'MANAGER' && trip.status === 'SUBMITTED';
-    const isTravelAdminApprove  = userRole === 'TRAVEL_ADMIN' && trip.status === 'PENDING_ADMIN_APPROVAL';
+    const isManagerApprove     = userRole === 'MANAGER'      && trip.status === 'SUBMITTED';
+    const isTravelAdminApprove = userRole === 'TRAVEL_ADMIN' && trip.status === 'PENDING_ADMIN_APPROVAL';
     if (!isManagerApprove && !isTravelAdminApprove) throw Errors.FORBIDDEN();
 
-    // BUG-01 fix: Manager chỉ được approve trip thuộc nhân viên dưới quyền mình
-    // NFR-TR-03 — RBAC ownership check: approverId phải là managerId của employee
     if (isManagerApprove && trip.employee.managerId !== approverId) throw Errors.FORBIDDEN();
 
-    // Thống nhất nguồn sự thật với runPolicyCheck: chỉ đếm vi phạm white-list
-    // BR-TR-04 (không đếm cả violationCount) — tự sửa trip cũ đã lưu requiresLevel2 sai
     const savedViolations: Array<{ code: string; severity: string }> = trip.policyCheckResult
-      ? JSON.parse(trip.policyCheckResult.violations)
+      ? JSON.parse((trip.policyCheckResult as { violations: string }).violations)
       : [];
     const hasViolations = requiresLevel2FromViolations(savedViolations);
     const routing       = routeApproval({ totalBudget: trip.estimatedBudget, hasViolations });
-    const newStatus      = isTravelAdminApprove ? 'APPROVED' : routing.decision;
-    const approvalLevel  = isManagerApprove ? 'LEVEL_1' : 'LEVEL_2';
-    const auditAction    = isManagerApprove ? AuditActions.MANAGER_APPROVED : AuditActions.ADMIN_APPROVED;
+    const newStatus     = isTravelAdminApprove ? 'APPROVED' : routing.decision;
+    const approvalLevel = isManagerApprove ? 'LEVEL_1' : 'LEVEL_2';
+    const auditAction   = isManagerApprove ? AuditActions.MANAGER_APPROVED : AuditActions.ADMIN_APPROVED;
 
     await tx.approvalRecord.create({
       data: {
         tripId, approverId, approvalLevel, action: 'APPROVED',
-        comment: comment ?? null,
-        budgetSnapshot:         trip.estimatedBudget,
-        hadViolationsSnapshot:  hasViolations,
+        comment:              comment ?? null,
+        budgetSnapshot:       trip.estimatedBudget,
+        hadViolationsSnapshot: hasViolations,
       },
     });
 
     const updated = await tx.trip.update({
       where: { id: tripId },
-      data: { status: newStatus, approvedAt: newStatus === 'APPROVED' ? new Date() : undefined },
+      data:  {
+        status:     newStatus,
+        approvedAt: newStatus === 'APPROVED' ? new Date() : undefined,
+      },
     });
 
     return { updated, newStatus, auditAction, employeeId: trip.employee.id };
   });
 
-  // ── Phase 2: Audit + Notification ngoài transaction (tránh timeout) ──────
-  await logAudit({ userId: approverId, entityType: 'TRIP', entityId: tripId,
+  await logAudit({
+    userId: approverId, entityType: 'TRIP', entityId: tripId,
     action: auditAction, previousState: 'SUBMITTED', newState: newStatus,
-    ipAddress: ipAddress ?? null });
+    ipAddress: ipAddress ?? null,
+  });
 
-  await createNotification({ recipientId: employeeId,
-    type: newStatus === 'APPROVED' ? 'TRIP_APPROVED' : 'PENDING_LEVEL2_APPROVAL',
-    message: newStatus === 'APPROVED'
-      ? 'Yeu cau cong tac cua ban da duoc phe duyet.'
-      : 'Yeu cau cong tac can phe duyet cap 2 (Travel Admin).',
-    referenceId: tripId, referenceType: 'TRIP' });
+  await createNotification({
+    recipientId:   employeeId,
+    type:          newStatus === 'APPROVED' ? 'TRIP_APPROVED' : 'PENDING_LEVEL2_APPROVAL',
+    message:       newStatus === 'APPROVED'
+      ? 'Yêu cầu công tác của bạn đã được phê duyệt.'
+      : 'Yêu cầu công tác cần phê duyệt cấp 2 (Travel Admin).',
+    referenceId:   tripId,
+    referenceType: 'TRIP',
+  });
 
   return formatTrip(updated as unknown as Record<string, unknown>);
 }
@@ -499,9 +595,10 @@ export async function rejectTrip(
   comment: string,
   ipAddress?: string
 ): Promise<unknown> {
-  if (!comment?.trim()) throw Errors.VALIDATION_ERROR({ fieldErrors: { comment: ['Ly do tu choi la bat buoc'] }, formErrors: [] });
+  if (!comment?.trim()) throw Errors.VALIDATION_ERROR({
+    fieldErrors: { comment: ['Lý do từ chối là bắt buộc'] }, formErrors: [],
+  });
 
-  // ── Phase 1: DB writes ────────────────────────────────────────────────────
   const { updated, previousStatus, auditAction, employeeId } = await prisma.$transaction(async (tx) => {
     const trip = await tx.trip.findUnique({
       where: { id: tripId },
@@ -514,16 +611,18 @@ export async function rejectTrip(
       (userRole === 'TRAVEL_ADMIN' && trip.status === 'PENDING_ADMIN_APPROVAL');
     if (!canReject) throw Errors.FORBIDDEN();
 
-    // BUG-02 fix: Manager chỉ được reject trip thuộc nhân viên dưới quyền mình
-    // NFR-TR-03 — RBAC ownership check: approverId phải là managerId của employee
     if (userRole === 'MANAGER' && trip.employee.managerId !== approverId) throw Errors.FORBIDDEN();
 
     const approvalLevel = userRole === 'MANAGER' ? 'LEVEL_1' : 'LEVEL_2';
     const auditAction   = userRole === 'MANAGER' ? AuditActions.MANAGER_REJECTED : AuditActions.ADMIN_REJECTED;
 
     await tx.approvalRecord.create({
-      data: { tripId, approverId, approvalLevel, action: 'REJECTED', comment: comment.trim(),
-        budgetSnapshot: trip.estimatedBudget, hadViolationsSnapshot: false },
+      data: {
+        tripId, approverId, approvalLevel, action: 'REJECTED',
+        comment:              comment.trim(),
+        budgetSnapshot:       trip.estimatedBudget,
+        hadViolationsSnapshot: false,
+      },
     });
 
     const updated = await tx.trip.update({ where: { id: tripId }, data: { status: 'REJECTED' } });
@@ -531,14 +630,19 @@ export async function rejectTrip(
     return { updated, previousStatus: trip.status, auditAction, employeeId: trip.employee.id };
   });
 
-  // ── Phase 2: Audit + Notification ────────────────────────────────────────
-  await logAudit({ userId: approverId, entityType: 'TRIP', entityId: tripId,
+  await logAudit({
+    userId: approverId, entityType: 'TRIP', entityId: tripId,
     action: auditAction, previousState: previousStatus, newState: 'REJECTED',
-    ipAddress: ipAddress ?? null });
+    ipAddress: ipAddress ?? null,
+  });
 
-  await createNotification({ recipientId: employeeId, type: 'TRIP_REJECTED',
-    message: `Yeu cau cong tac cua ban bi tu choi. Ly do: ${comment.trim()}`,
-    referenceId: tripId, referenceType: 'TRIP' });
+  await createNotification({
+    recipientId:   employeeId,
+    type:          'TRIP_REJECTED',
+    message:       `Yêu cầu công tác của bạn bị từ chối. Lý do: ${comment.trim()}`,
+    referenceId:   tripId,
+    referenceType: 'TRIP',
+  });
 
   return formatTrip(updated as unknown as Record<string, unknown>);
 }
@@ -549,7 +653,6 @@ export async function closeTrip(
   financeId: string,
   ipAddress?: string
 ): Promise<unknown> {
-  // ── Phase 1: DB writes ────────────────────────────────────────────────────
   const { updated, previousStatus, employeeId } = await prisma.$transaction(async (tx) => {
     const trip = await tx.trip.findUnique({
       where: { id: tripId },
@@ -562,37 +665,32 @@ export async function closeTrip(
     if (!expense || expense.status !== 'APPROVED')
       throw Errors.INVALID_STATUS_TRANSITION(trip.status, 'CLOSED (expense must be APPROVED)');
 
-    // BR-TR-05: hồ sơ >10% chưa có Manager duyệt bổ sung ⇒ Finance KHÔNG được đóng (422)
     if (expense.managerReapprovalRequired && !expense.managerReapproved)
       throw Errors.EXPENSE_VARIANCE_EXCEEDED(expense.variancePct ?? 0);
 
-    // BUG-23 fix: optimistic concurrency — thêm status check trong where clause
-    // Nếu status đã bị thay đổi bởi concurrent request, update sẽ không match
-    // và Prisma trả về RecordNotFound → transaction rollback tự động
     const updated = await tx.trip.update({
-      where: {
-        id: tripId,
-        status: 'EXPENSE_APPROVED', // chỉ close khi đang ở đúng trạng thái này
-      },
-      data: { status: 'CLOSED', closedAt: new Date() },
-    }).catch(() => {
-      // update không match → trip đã bị close bởi request khác
-      throw Errors.TRIP_IMMUTABLE();
-    });
+      where: { id: tripId, status: 'EXPENSE_APPROVED' },
+      data:  { status: 'CLOSED', closedAt: new Date() },
+    }).catch(() => { throw Errors.TRIP_IMMUTABLE(); });
 
     await tx.expense.update({ where: { id: expense.id }, data: { status: 'CLOSED' } });
 
     return { updated, previousStatus: trip.status, employeeId: trip.employee.id };
   });
 
-  // ── Phase 2: Audit + Notification ────────────────────────────────────────
-  await logAudit({ userId: financeId, entityType: 'TRIP', entityId: tripId,
+  await logAudit({
+    userId: financeId, entityType: 'TRIP', entityId: tripId,
     action: AuditActions.TRIP_CLOSED, previousState: previousStatus, newState: 'CLOSED',
-    ipAddress: ipAddress ?? null });
+    ipAddress: ipAddress ?? null,
+  });
 
-  await createNotification({ recipientId: employeeId, type: 'TRIP_CLOSED',
-    message: 'Ho so cong tac cua ban da duoc dong tat. Cam on!',
-    referenceId: tripId, referenceType: 'TRIP' });
+  await createNotification({
+    recipientId:   employeeId,
+    type:          'TRIP_CLOSED',
+    message:       'Hồ sơ công tác của bạn đã được đóng. Cảm ơn!',
+    referenceId:   tripId,
+    referenceType: 'TRIP',
+  });
 
   return formatTrip(updated as unknown as Record<string, unknown>);
 }

@@ -10,13 +10,13 @@
 Figma: _[Prototype URL — xem `docs/04-design/prototype-link.md`]_ → Screen: **Create Trip Request Form**
 
 ## Goal
-Cho phép Employee tạo một Trip Request mới với đầy đủ thông tin chuyến đi, lưu ở trạng thái `DRAFT`, đồng thời hệ thống tự động tính gợi ý per diem và gắn cờ khẩn cấp nếu ngày đi < 3 ngày làm việc.
+Cho phép Employee tạo một Trip Request mới với đầy đủ thông tin chuyến đi, lưu ở trạng thái `DRAFT`. Hệ thống tự suy `destinationType` từ tên điểm đến và gắn cờ khẩn cấp nếu ngày đi < 3 ngày làm việc (D-16).
 
 ---
 
 ## Preconditions
 - Employee đã đăng nhập (JWT access token hợp lệ, role = `EMPLOYEE`).
-- Employee có `manager_id` được gán trong hệ thống (ASM-TR-01).
+- Employee có `manager_id` được gán trong hệ thống.
 - Ngày hiện tại đã biết (server clock UTC).
 
 ---
@@ -24,12 +24,12 @@ Cho phép Employee tạo một Trip Request mới với đầy đủ thông tin 
 ## Happy Path
 
 1. Employee mở form **Create Trip Request**.
-2. Employee nhập đầy đủ: Điểm xuất phát, Điểm đến, `destinationType` (TIER1_CITY | OTHER), Ngày đi, Ngày về, Mục đích (≥ 10 ký tự), Tổng dự toán.
-3. Employee nhập tuỳ chọn: `hotelCostPerNight`, `hotelNights`, `perDiemBudget`, `transportBudget`, `otherBudget`.
-4. Client tính hint per diem hiển thị: `Max_Per_Diem = tripDays × rate` (400.000 VNĐ nếu TIER1_CITY, 300.000 nếu OTHER) — chỉ là gợi ý, không block submit.
+2. Employee nhập: Điểm xuất phát, Điểm đến, Ngày đi, Ngày về, Mục đích (≥ 10 ký tự), Ngân sách dự kiến tổng chuyến đi (`estimatedBudget`).
+3. **Không còn** các ô: `hotelCostPerNight`, `hotelNights`, `perDiemBudget`, `transportBudget`, `otherBudget`, `destinationType` (D-16).
+4. Client tính preview hạn mức BR-TR-08 realtime dựa trên ngày đi/về + điểm đến + jobTitle user.
 5. Employee bấm **Lưu nháp** → `POST /api/v1/trips`.
-6. Server tạo bản ghi `trips` với `status = DRAFT`, trả về 201 với `tripId`.
-7. Client redirect đến trang chi tiết Trip vừa tạo.
+6. Server: tự tính `destinationType = resolveDestinationType(destination)`, lưu `status = DRAFT`, trả 201.
+7. Client redirect đến trang chi tiết Trip.
 
 ---
 
@@ -37,36 +37,17 @@ Cho phép Employee tạo một Trip Request mới với đầy đủ thông tin 
 
 | ID | Tình huống | Phản hồi hệ thống |
 |---|---|---|
-| E-01 | Thiếu field bắt buộc (origin, destination, departureDate, returnDate, purpose, estimatedBudget) | `400 VALIDATION_ERROR` — highlight field lỗi, không submit |
-| E-02 | `returnDate < departureDate` | `400 VALIDATION_ERROR`: "Ngày về phải sau hoặc bằng ngày đi" |
-| E-03 | `departureDate` là ngày trong quá khứ | `400 VALIDATION_ERROR`: "Ngày đi phải là ngày trong tương lai" |
-| E-04 | `estimatedBudget ≤ 0` hoặc không phải số nguyên | `400 VALIDATION_ERROR`: "Dự toán phải là số nguyên dương (VND)" |
-| E-05 | `perDiemBudget > tripDays × rate` (BR-TR-02) | Không cảnh báo riêng theo BR-TR-02; kiểm tra tổng hợp theo BR-TR-08 |
-| E-06 | `departureDate` < 3 ngày làm việc kể từ hôm nay (BR-TR-03) | Client hiển thị checkbox bắt buộc "Chuyến đi khẩn cấp" và field `urgencyReason` bắt buộc. Server gắn `is_urgent = true` |
-| E-07 | Token hết hạn (401) | Axios interceptor tự refresh → retry. Nếu refresh thất bại → redirect `/login` |
-| E-08 | Lỗi mạng / server 500 | Toast lỗi: "Không thể kết nối. Vui lòng thử lại." — không mất dữ liệu đã nhập (form giữ state) |
-| E-09 | Role không phải EMPLOYEE (403) | `403 FORBIDDEN` — không hiển thị form tạo trip |
+| E-01 | Thiếu field bắt buộc | `400 VALIDATION_ERROR` |
+| E-02 | `returnDate < departureDate` | `400 VALIDATION_ERROR` |
+| E-03 | `departureDate` trong quá khứ | `400 VALIDATION_ERROR` |
+| E-04 | `estimatedBudget ≤ 0` | `400 VALIDATION_ERROR` |
+| E-05 | `plannedBudget > Combined_Limit` (BR-TR-08) | Preview cảnh báo tổng hợp realtime ở FE; không chặn submit |
+| E-06 | `departureDate` < 3 ngày làm việc (BR-TR-03) | Checkbox "Chuyến đi khẩn cấp" + `urgencyReason` bắt buộc |
+| E-07 | Token hết hạn | Auto refresh → retry |
 
 ---
 
-## Data Read / Write
-
-### Read
-- `GET /api/v1/auth/me` — lấy `jobGrade`, `managerId` để hiển thị hotel limit hint phía client.
-
-### Write
-- `POST /api/v1/trips` — tạo bản ghi `trips` với `status = DRAFT`.
-- Server INSERT `audit_logs`: `{ action: "TRIP_CREATED", entityType: "TRIP", previousState: null, newState: "DRAFT" }`.
-
-### DB Tables affected
-| Bảng | Operation | Ghi chú |
-|---|---|---|
-| `trips` | INSERT | `status = DRAFT`, `employee_id = req.user.id` |
-| `audit_logs` | INSERT | `action = TRIP_CREATED` |
-
----
-
-## API Contract
+## API Contract (D-16)
 
 ### `POST /api/v1/trips`
 **Request Body:**
@@ -74,11 +55,13 @@ Cho phép Employee tạo một Trip Request mới với đầy đủ thông tin 
 {
   "origin": "Hà Nội",
   "destination": "Đà Nẵng",
-  "destinationType": "TIER1_CITY",
-  "departureDate": "2026-09-20",
-  "returnDate": "2026-09-22",
+  "departureDate": "2026-10-01",
+  "returnDate": "2026-10-03",
   "purpose": "Triển khai hệ thống tại chi nhánh miền Trung",
-  "estimatedBudget": 5000000,
+  "estimatedBudget": 8500000
+}
+```
+*Ghi chú: `destinationType` không gửi — server tự suy. Không có `hotelCostPerNight`, `perDiemBudget`.*  "estimatedBudget": 5000000,
   "hotelCostPerNight": 800000,
   "hotelNights": 2,
   "perDiemBudget": 1200000,
