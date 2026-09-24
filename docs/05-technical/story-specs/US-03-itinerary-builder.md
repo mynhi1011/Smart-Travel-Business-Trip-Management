@@ -10,7 +10,7 @@
 Figma: _[Prototype URL]_ → Screen: **Itinerary Builder** (table/timeline view theo ngày)
 
 ## Goal
-Cho phép Employee xem, thêm, sửa, xóa các mốc hoạt động trong lịch trình công tác. Hệ thống cảnh báo khi chi phí khách sạn vượt hạn mức theo cấp bậc (BR-TR-01). Toàn bộ bị chặn khi trip ở trạng thái `CLOSED`.
+Cho phép Employee xem, thêm, sửa, xóa các mốc hoạt động trong lịch trình công tác. Hạn mức khách sạn là dữ liệu đầu vào của kiểm tra tổng hợp BR-TR-08; không cảnh báo riêng theo BR-TR-01. Toàn bộ bị chặn khi trip ở trạng thái `CLOSED`.
 
 ---
 
@@ -41,14 +41,14 @@ Cho phép Employee xem, thêm, sửa, xóa các mốc hoạt động trong lịc
 3. Confirm → `DELETE /api/v1/trips/:tripId/itinerary/:itemId`.
 4. Client xóa item khỏi timeline, cập nhật `totalEstimatedCost`.
 
----Với user story này, ngoài file vault tôi đã thực hiện còn cần trình bày gì nữa. Hãy cho tôi cách thức trình bày những file liên quan đến user story này với role AI. hướng dẫn trực tiếp trong chat này, không làm thay đổi bất kỳ nội dung file nào
+---
 
-## Alternate / Error PathsVới user story này, ngoài file vault tôi đã thực hiện còn cần trình bày gì nữa. Hãy cho tôi cách thức trình bày những file liên quan đến user story này với role AI. hướng dẫn trực tiếp trong chat này, không làm thay đổi bất kỳ nội dung file nào
+## Alternate / Error Paths
 
 | ID | Tình huống | Phản hồi hệ thống |
-|---|---|---|Với user story này, ngoài file vault tôi đã thực hiện còn cần trình bày gì nữa. Hãy cho tôi cách thức trình bày những file liên quan đến user story này với role AI. hướng dẫn trực tiếp trong chat này, không làm thay đổi bất kỳ nội dung file nào
+|---|---|---|
 | E-01 | `itemDate` nằm ngoài `[departureDate, returnDate]` | `422`: "Ngày hoạt động phải nằm trong thời gian chuyến đi" |
-| E-02 | `hotelCostPerNight` vượt hạn mức job_grade (BR-TR-01) | Client cảnh báo đỏ inline: "Chi phí khách sạn vượt hạn mức [X] VNĐ/đêm theo cấp bậc của bạn. Vui lòng nhập giải trình." — vẫn cho phép lưu nếu có giải trình |
+| E-02 | `hotelCostPerNight` vượt hạn mức job_grade (BR-TR-01) | Không cảnh báo riêng theo BR-TR-01 và không yêu cầu giải trình; kiểm tra tổng hợp theo BR-TR-08 |
 | E-03 | `estimatedCost < 0` | `400 VALIDATION_ERROR` |
 | E-04 | Trip đã CLOSED | `409 TRIP_IMMUTABLE`: "Chuyến đi đã đóng hồ sơ, không thể chỉnh sửa." |
 | E-05 | Trip ở bất kỳ trạng thái nào ngoại trừ `CLOSED` | Owner được phép chỉnh sửa itinerary; server enforce quyền owner và trạng thái. Khi `CLOSED`, mọi thao tác ghi bị chặn với `409 TRIP_IMMUTABLE`. |
@@ -151,7 +151,7 @@ Cho phép Employee xem, thêm, sửa, xóa các mốc hoạt động trong lịc
 |---|---|---|---|
 | `itemDate` trong `[departureDate, returnDate]` | Logic | Server | 422 |
 | `estimatedCost >= 0` | data-model | Server (CHECK) | 400 |
-| `hotelCostPerNight > limit[jobGrade]` | BR-TR-01 | Client (warning) + PolicyCheck | Warning cảnh báo đỏ |
+| Chi phí lưu trú vượt hạn mức riêng | BR-TR-01, BR-TR-08 | PolicyCheck tổng hợp | Không cảnh báo riêng; chỉ cảnh báo khi tổng kết hợp vượt hạn mức |
 | Trip CLOSED → block write | BR-TR-06 | immutableGuard middleware | 409 |
 | `isAiGenerated` không nhận từ client | data-model | Server strip | Luôn `false` khi tạo thủ công |
 
@@ -171,7 +171,7 @@ Cho phép Employee xem, thêm, sửa, xóa các mốc hoạt động trong lịc
 | Item tạo thành công | `info` | `{ action: "ITINERARY_ITEM_CREATED", tripId, itemId, category, estimatedCost }` |
 | Item cập nhật | `info` | `{ action: "ITINERARY_ITEM_UPDATED", tripId, itemId, changedFields }` |
 | Item xóa | `info` | `{ action: "ITINERARY_ITEM_DELETED", tripId, itemId }` |
-| Hotel cost warning | `info` | `{ action: "HOTEL_LIMIT_WARNING", jobGrade, limit, actual, tripId }` |
+| Combined cost policy warning | `info` | `{ action: "COMBINED_COST_LIMIT_WARNING", rule: "BR-TR-08", tripId }` — chỉ ghi khi tổng vượt hạn mức |
 | CLOSED trip write attempt | `warn` | `{ action: "IMMUTABLE_GUARD_BLOCKED", tripId, status: "CLOSED" }` |
 
 ---
@@ -184,7 +184,7 @@ Cho phép Employee xem, thêm, sửa, xóa các mốc hoạt động trong lịc
 | T3.2 | Happy path | Sửa item (đổi location) | 200, thay đổi phản ánh ngay |
 | T3.3 | Happy path | Xóa item | 204, item biến mất, totalCost cập nhật |
 | T3.4 | AC 3.1 | Thêm xong, `totalEstimatedCost` = tổng items | Số liệu khớp |
-| T3.5 | AC 3.2 | `hotelCostPerNight = 1200000` với STAFF | Client hiển thị cảnh báo đỏ BR-TR-01 |
+| T3.5 | AC 3.2 | `hotelCostPerNight = 1200000` với STAFF | Không cảnh báo riêng BR-TR-01; kết quả phụ thuộc tổng hợp BR-TR-08 |
 | T3.6 | AC 3.2 | `hotelCostPerNight = 2000000` với DIRECTOR (limit=3M) | Không cảnh báo |
 | T3.7 | Error E-01 | `itemDate` = `departureDate - 1` | 422 |
 | T3.8 | Error E-03 | `estimatedCost = -500` | 400 |
@@ -203,7 +203,7 @@ Cho phép Employee xem, thêm, sửa, xóa các mốc hoạt động trong lịc
 
 - [ ] CRUD endpoints itinerary items hoạt động đúng
 - [ ] `immutableGuard` chặn write khi trip CLOSED (BR-TR-06)
-- [ ] Hotel limit warning hiển thị client-side theo `jobGrade` (BR-TR-01)
+- [ ] Không hiển thị cảnh báo khách sạn riêng; áp dụng kiểm tra tổng hợp BR-TR-08
 - [ ] `itemDate` được validate trong khoảng trip dates
 - [ ] `isAiGenerated` luôn = false khi thêm thủ công
 - [ ] `totalEstimatedCost` cập nhật đúng sau mỗi thay đổi
@@ -213,4 +213,4 @@ Cho phép Employee xem, thêm, sửa, xóa các mốc hoạt động trong lịc
 
 > **Quyết định đã chốt (D-11):** Owner được chỉnh sửa itinerary ở mọi trạng thái trừ `CLOSED`; server phải enforce quy tắc này và UI ẩn/disable thao tác ghi khi `CLOSED`.
 >
-> **Hotel warning:** Khi vượt hạn mức, hiển thị cảnh báo theo BR-TR-01; không tự suy diễn rằng `justification` là bắt buộc nếu policy/API contract chưa quy định điều kiện đó.
+> **Hotel limit:** BR-TR-01 chỉ cung cấp mức tham chiếu. Không cảnh báo riêng và không yêu cầu `justification`; chỉ hiển thị cảnh báo tổng hợp khi BR-TR-08 bị vượt.

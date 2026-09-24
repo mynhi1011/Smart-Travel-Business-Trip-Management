@@ -10,7 +10,7 @@
 Figma: _[Prototype URL]_ → Screen: **Trip Form — Policy Check Result Banner**
 
 ## Goal
-Hệ thống tự động chạy PolicyCheckEngine khi Employee nộp Trip Request, phát hiện vi phạm hạn mức lưu trú (BR-TR-01), phụ cấp (BR-TR-02), thời hạn gửi (BR-TR-03) và định tuyến duyệt cấp 2 nếu cần (BR-TR-04). Kết quả hiển thị trực quan trên giao diện.
+Hệ thống tự động chạy PolicyCheckEngine khi Employee nộp Trip Request, kiểm tra tổng hợp hạn mức lưu trú và phụ cấp (BR-TR-08), thời hạn gửi (BR-TR-03) và định tuyến duyệt cấp 2 nếu cần (BR-TR-04). Kết quả hiển thị trực quan trên giao diện.
 
 ---
 
@@ -28,8 +28,7 @@ Hệ thống tự động chạy PolicyCheckEngine khi Employee nộp Trip Reque
 3. Server (trong 1 transaction):
    a. Khoá row trip (`SELECT FOR UPDATE`).
    b. Chạy `PolicyCheckEngine`:
-      - BR-TR-01: `hotelCostPerNight ≤ HOTEL_LIMIT[employee.jobGrade]`
-      - BR-TR-02: `perDiemBudget ≤ tripDays × RATE[destinationType]`
+      - BR-TR-08: `(hotelCostPerNight × hotelNights) + perDiemBudget ≤ (HOTEL_LIMIT[jobGrade] × hotelNights) + (tripDays × RATE[destinationType])`; nếu vượt, tạo đúng một cảnh báo tổng hợp, không yêu cầu lý do. BR-TR-01 và BR-TR-02 chỉ cung cấp các mức thành phần.
       - BR-TR-03: working days diff ≥ 3 hoặc `is_urgent = true`
       - BR-TR-04: `estimatedBudget ≤ 20M AND violations.length === 0`
    c. INSERT `policy_check_results` (snapshot bất biến).
@@ -44,8 +43,8 @@ Hệ thống tự động chạy PolicyCheckEngine khi Employee nộp Trip Reque
 
 | ID | Tình huống | Phản hồi hệ thống |
 |---|---|---|
-| E-01 | `hotelCostPerNight > limit` (BR-TR-01) | `violations` có `POLICY_VIOLATION_ACCOMMODATION_OVER_BUDGET`, banner đỏ/vàng, `requiresLevel2 = true` |
-| E-02 | `perDiemBudget > tripDays × rate` (BR-TR-02) | `violations` có `POLICY_VIOLATION_PER_DIEM_EXCEEDED`, banner cảnh báo |
+| E-01 | Tổng chi phí lưu trú và per diem vượt tổng hạn mức (BR-TR-08) | Tạo một cảnh báo tổng hợp; không yêu cầu lý do |
+| E-02 | Chỉ riêng khách sạn hoặc per diem vượt mức thành phần nhưng tổng kết hợp không vượt | Không cảnh báo theo BR-TR-01/02; không yêu cầu lý do |
 | E-03 | `is_urgent = true` (BR-TR-03) | `violations` có `URGENT_TRIP_NOTICE`, severity WARNING |
 | E-04 | `estimatedBudget > 20M` (BR-TR-04) | `requiresLevel2 = true`, `violations` có `POLICY_VIOLATION_BUDGET_THRESHOLD` |
 | E-05 | Nhiều vi phạm cùng lúc | Tất cả violations hiển thị; `requiresLevel2 = true` |
@@ -60,7 +59,7 @@ Hệ thống tự động chạy PolicyCheckEngine khi Employee nộp Trip Reque
 
 ### Read
 - `users` — lấy `jobGrade` để check BR-TR-01.
-- `trips` — lấy `hotelCostPerNight`, `perDiemBudget`, `estimatedBudget`, `departure_date`, `trip_days`, `destinationType`.
+- `trips` — lấy `hotelCostPerNight`, `hotelNights`, `perDiemBudget`, `estimatedBudget`, `departure_date`, `trip_days`, `destinationType`.
 
 ### Write
 - `trips`: UPDATE `status = SUBMITTED`, `isUrgent`, `requiresLevel2`, `submittedAt`.
@@ -112,12 +111,12 @@ Hệ thống tự động chạy PolicyCheckEngine khi Employee nộp Trip Reque
     "passed": false,
     "violations": [
       {
-        "code": "POLICY_VIOLATION_ACCOMMODATION_OVER_BUDGET",
-        "detail": "Hotel 2.000.000 VNĐ/đêm vượt hạn mức STAFF (1.000.000 VNĐ/đêm)",
+        "code": "POLICY_VIOLATION_COMBINED_LIMIT_EXCEEDED",
+        "detail": "Tổng chi phí lưu trú và phụ cấp vượt tổng hạn mức kết hợp BR-TR-08; không yêu cầu nhập lý do",
         "severity": "WARNING",
-        "rule": "BR-TR-01",
-        "limit": 1000000,
-        "actual": 2000000
+        "rule": "BR-TR-08",
+        "limit": 0000000,
+        "actual": 0000000
       }
     ],
     "violationCount": 1,
@@ -143,8 +142,7 @@ Hệ thống tự động chạy PolicyCheckEngine khi Employee nộp Trip Reque
 
 | Rule | Code | Logic | `requiresLevel2` |
 |---|---|---|---|
-| Hotel limit theo jobGrade | `POLICY_VIOLATION_ACCOMMODATION_OVER_BUDGET` | `hotelCostPerNight > HOTEL_LIMIT[jobGrade]` | ✅ |
-| Per Diem cap | `POLICY_VIOLATION_PER_DIEM_EXCEEDED` | `perDiemBudget > tripDays × RATE[destType]` | ✅ |
+| Combined accommodation + per diem | `POLICY_VIOLATION_COMBINED_LIMIT_EXCEEDED` | `(hotelCostPerNight × hotelNights) + perDiemBudget > (HOTEL_LIMIT[jobGrade] × hotelNights) + (tripDays × RATE[destType])` | ✅ |
 | Advance notice | `URGENT_TRIP_NOTICE` | `workingDaysDiff < 3` | ✅ |
 | Budget threshold | `POLICY_VIOLATION_BUDGET_THRESHOLD` | `estimatedBudget > 20_000_000` | ✅ |
 
@@ -182,11 +180,11 @@ OTHER      → 300.000 VNĐ/ngày
 | ID | Loại | Mô tả | Expected |
 |---|---|---|---|
 | T4.1 | AC 4.1 | Không vi phạm (hotel=800k STAFF, per diem đúng, 7 ngày trước) | `passed=true`, banner xanh |
-| T4.2 | AC 4.2 | `hotelCostPerNight=1500000`, `jobGrade=STAFF` (limit=1M) | `POLICY_VIOLATION_ACCOMMODATION_OVER_BUDGET`, `requiresLevel2=true` |
-| T4.3 | AC 4.2 | `perDiemBudget=2000000`, TIER1_CITY, `tripDays=3` (max=1.2M) | `POLICY_VIOLATION_PER_DIEM_EXCEEDED` |
+| T4.2 | AC 4.2 | Hotel vượt mức thành phần nhưng tổng kết hợp không vượt hạn mức | Không cảnh báo tổng hợp |
+| T4.3 | AC 4.2 | Per diem vượt mức thành phần nhưng tổng kết hợp không vượt hạn mức | Không cảnh báo tổng hợp |
 | T4.4 | AC 4.2 | `estimatedBudget=25000000` (> 20M) | `POLICY_VIOLATION_BUDGET_THRESHOLD`, `requiresLevel2=true` |
 | T4.5 | AC 4.2 | `is_urgent=true` | `URGENT_TRIP_NOTICE`, severity=WARNING |
-| T4.6 | Combo | Hotel vượt + Budget > 20M | 2 violations, `requiresLevel2=true` |
+| T4.6 | Combo | Tổng kết hợp vượt hạn mức và dự toán > 20M | Cảnh báo tổng hợp BR-TR-08; định tuyến L2 do ngưỡng ngân sách BR-TR-04 |
 | T4.7 | Error E-06 | Submit trip đang SUBMITTED | `409 INVALID_STATE` |
 | T4.8 | Auth | MANAGER submit trip của employee khác | `403` |
 | T4.9 | Transaction | PolicyCheck lỗi giữa chừng | Trip giữ nguyên DRAFT, không có policy_check_result |
@@ -201,7 +199,7 @@ OTHER      → 300.000 VNĐ/ngày
 ## Definition of Done
 
 - [ ] `POST /trips/:tripId/submit` chạy PolicyCheckEngine server-side
-- [ ] 4 violation codes hoạt động đúng theo BR-TR-01, 02, 03, 04
+- [ ] Cảnh báo tổng hợp BR-TR-08 và các điều kiện BR-TR-03, BR-TR-04 hoạt động đúng
 - [ ] `requiresLevel2` được set đúng theo kết quả PolicyCheck + budget
 - [ ] `policy_check_results` là snapshot bất biến sau submit
 - [ ] Toàn bộ trong 1 DB transaction (NFR-TR-05)
