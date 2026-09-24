@@ -71,7 +71,7 @@ Functional Requirement (REQ-TR-*)
 | **Mô tả** | Employee tạo Trip Request: điểm đi/đến, ngày, mục đích, dự toán |
 | **Priority** | Must |
 | **User Stories** | [US-01] Khởi tạo Trip Request cơ bản |
-| **Business Rules** | [BR-TR-02] Per Diem, [BR-TR-03] Advance Notice |
+| **Business Rules** | [BR-TR-02] Per Diem (mức thành phần), [BR-TR-08] Combined Limit, [BR-TR-03] Advance Notice |
 | **API Endpoints** | `POST /api/v1/trips`, `GET /api/v1/trips`, `GET /api/v1/trips/:id`, `PATCH /api/v1/trips/:id`, `DELETE /api/v1/trips/:id` |
 | **DB Tables** | `trips` (INSERT), `audit_logs` (INSERT) |
 | **Story Spec** | `05-technical/story-specs/US-01-create-trip-request.md` |
@@ -106,7 +106,7 @@ Functional Requirement (REQ-TR-*)
 | **Mô tả** | Tự động kiểm tra vi phạm chính sách trước submit, hiển thị cảnh báo |
 | **Priority** | Must |
 | **User Stories** | [US-04] Policy Check tự động |
-| **Business Rules** | [BR-TR-01] Hotel Limit, [BR-TR-02] Per Diem, [BR-TR-03] Advance Notice, [BR-TR-04] Approval Matrix |
+| **Business Rules** | [BR-TR-08] Combined Limit, [BR-TR-03] Advance Notice, [BR-TR-04] Approval Matrix |
 | **API Endpoints** | `POST /api/v1/trips/:id/submit` (trigger PolicyCheckEngine) |
 | **DB Tables** | `policy_check_results` (INSERT snapshot), `trips` (UPDATE `requires_level2`, `is_urgent`), `audit_logs` |
 | **Story Spec** | `05-technical/story-specs/US-04-policy-check.md` |
@@ -157,7 +157,7 @@ Functional Requirement (REQ-TR-*)
 | **Mô tả** | Employee xem, thêm, sửa, xóa mốc hoạt động trong lịch trình |
 | **Priority** | Must |
 | **User Stories** | [US-03] Itinerary Builder |
-| **Business Rules** | [BR-TR-01] Hotel Limit (warning), [BR-TR-06] Closed Trip Immutability |
+| **Business Rules** | [BR-TR-01] Hotel Limit (input for combined check only), [BR-TR-06] Closed Trip Immutability |
 | **API Endpoints** | `GET /api/v1/trips/:id/itinerary`, `POST /api/v1/trips/:id/itinerary`, `PATCH /api/v1/trips/:id/itinerary/:itemId`, `DELETE /api/v1/trips/:id/itinerary/:itemId` |
 | **DB Tables** | `itinerary_items` (CRUD), `audit_logs` |
 | **Story Spec** | `05-technical/story-specs/US-03-itinerary-builder.md` |
@@ -281,7 +281,7 @@ Mỗi User Story phải truy ngược về ít nhất 1 REQ. Bảng kiểm tra k
 | **US-01** Tạo Trip Request | REQ-TR-01 | BR-TR-02, BR-TR-03 | US-01-create-trip-request.md | ✅ |
 | **US-02** AI Itinerary | REQ-TR-02 | BR-TR-07 | US-02-ai-itinerary.md | ✅ |
 | **US-03** Itinerary Builder | REQ-TR-06 | BR-TR-01, BR-TR-06 | US-03-itinerary-builder.md | ✅ |
-| **US-04** Policy Check | REQ-TR-03 | BR-TR-01, BR-TR-02, BR-TR-03, BR-TR-04 | US-04-policy-check.md | ✅ |
+| **US-04** Policy Check | REQ-TR-03 | BR-TR-08, BR-TR-03, BR-TR-04 | US-04-policy-check.md | ✅ |
 | **US-05** Manager Approve L1 | REQ-TR-04 | BR-TR-04 | US-05-manager-approve-l1.md | ✅ |
 | **US-06** Travel Admin L2 | REQ-TR-05 | BR-TR-04 | US-06-travel-admin-approve-l2.md | ✅ |
 | **US-07** Expense Claim | REQ-TR-07, REQ-TR-08 | BR-TR-05 | US-07-expense-claim.md | ✅ |
@@ -299,8 +299,9 @@ Mỗi BR phải được bảo vệ tại ít nhất 1 tầng (DB constraint, Se
 
 | BR ID | Tên Rule | User Stories | API Endpoint | DB Layer | Service Layer | Story Spec Test |
 |---|---|---|---|---|---|---|
-| **BR-TR-01** | Hotel Limit theo job_grade | US-03, US-04 | `POST /trips/:id/itinerary`, `POST /trips/:id/submit` | ❌ (cross-table) | ✅ PolicyCheckEngine | T3.5, T4.2 |
-| **BR-TR-02** | Per Diem Allowance | US-01, US-04 | `POST /trips/:id/submit` | ❌ | ✅ PolicyCheckEngine | T1.3, T4.3 |
+| **BR-TR-01** | Hotel Limit theo job_grade (thành phần) | US-03, US-04 | `POST /trips/:id/itinerary`, `POST /trips/:id/submit` | ❌ (cross-table) | Dùng trong BR-TR-08 | T3.5 |
+| **BR-TR-08** | Combined accommodation + per diem (one warning only on combined overage); single warning only when combined total exceeds limit | US-01, US-03, US-04 | `POST /trips/:id/submit` | ❌ | ✅ PolicyCheckEngine | T4.2–T4.3, T4.6 |
+| **BR-TR-02** | Per Diem rate used only as a component in BR-TR-08; no standalone warning | US-01, US-04 | `POST /trips/:id/submit` | ❌ | Used by BR-TR-08 | T1.3, T4.3 |
 | **BR-TR-03** | Advance Notice 3 ngày | US-01, US-04 | `POST /trips`, `POST /trips/:id/submit` | ✅ `CHECK (NOT is_urgent OR urgency_reason IS NOT NULL)` | ✅ working days calc | T1.4, T4.5 |
 | **BR-TR-04** | Approval Matrix 20M | US-05, US-06, US-04 | `POST /trips/:id/approve` | ✅ UNIQUE INDEX approve per level | ✅ ApprovalRouter | T5.1–T5.3, T6.1 |
 | **BR-TR-05** | Expense Variance ≤10% | US-07, US-08 | `POST /expense/submit`, `POST /expense/approve` | ✅ `chk_expenses_reapproval_consistent` | ✅ ExpenseService | T7.4–T7.6, T8.3–T8.4 |
@@ -361,10 +362,10 @@ Mỗi endpoint phải truy ngược về ít nhất 1 REQ và 1 US:
 
 | Bảng DB | REQ | US | BR | Ghi chú |
 |---|---|---|---|---|
-| `users` | — | ALL | BR-TR-01 (job_grade) | Foundation table |
+| `users` | — | ALL | BR-TR-01 (job_grade; component for BR-TR-08 only) | Foundation table |
 | `refresh_tokens` | — | ALL | — | Auth (ADR-05) |
 | `trips` | REQ-TR-01, 03, 04, 05, 09, 10 | US-01, 04, 05, 06, 08, 09 | BR-TR-03, 04, 06 | Central entity, 13 statuses |
-| `policy_check_results` | REQ-TR-03 | US-04 | BR-TR-01, 02, 03, 04 | Snapshot bất biến |
+| `policy_check_results` | REQ-TR-03 | US-04 | BR-TR-08, 03, 04 | Snapshot bất biến |
 | `itinerary_items` | REQ-TR-06, 02 | US-02, 03 | BR-TR-01, 06 | `is_ai_generated` flag |
 | `approval_records` | REQ-TR-04, 05, 09 | US-05, 06, 08 | BR-TR-04 | Snapshot budget/violations |
 | `expenses` | REQ-TR-07, 08, 09 | US-07, 08 | BR-TR-05, 06 | Server-computed variance |
@@ -412,9 +413,9 @@ Mỗi endpoint phải truy ngược về ít nhất 1 REQ và 1 US:
 
 | Metric | Giá trị |
 |---|---|
-| Tổng BR | 7 (BR-TR-01 → BR-TR-07) |
-| BR được enforce ≥ 1 tầng | **7/7** |
-| BR được test | **7/7** |
+| Tổng BR | 8 (BR-TR-01 → BR-TR-08) |
+| BR được enforce ≥ 1 tầng | **8/8** |
+| BR được test | **8/8** |
 | BR mồ côi | **0** |
 | Coverage | **100%** ✅ |
 
@@ -434,7 +435,7 @@ Mỗi endpoint phải truy ngược về ít nhất 1 REQ và 1 US:
 | US-01 | REQ-TR-01 | BR-TR-02, BR-TR-03 | AC 1.1, AC 1.2, AC 1.3 | TC-001–TC-004 | Covered |
 | US-02 | REQ-TR-02 | BR-TR-06, BR-TR-07 | AC 2.1, AC 2.2 | TC-005–TC-008 | Covered |
 | US-03 | REQ-TR-06 | BR-TR-01, BR-TR-06 | AC 3.1, AC 3.2 | TC-009–TC-012 | Covered |
-| US-04 | REQ-TR-03 | BR-TR-01, BR-TR-02, BR-TR-03, BR-TR-04 | AC 4.1, AC 4.2 | TC-013–TC-016 | Covered |
+| US-04 | REQ-TR-03 | BR-TR-08, BR-TR-03, BR-TR-04 | AC 4.1, AC 4.2 | TC-013–TC-016 | Covered |
 | US-05 | REQ-TR-04, REQ-TR-05 | BR-TR-04 | AC 5.1, AC 5.2, AC 5.3 | TC-017–TC-020 | Covered |
 | US-06 | REQ-TR-05 | BR-TR-04 | AC 6.1, AC 6.2 | TC-021–TC-023 | Covered |
 | US-07 | REQ-TR-07, REQ-TR-08 | BR-TR-05 | AC 7.1, AC 7.2, AC 7.3 | TC-024–TC-027 | Covered |
