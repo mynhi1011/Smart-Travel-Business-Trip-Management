@@ -73,7 +73,7 @@ Hệ thống áp dụng **Layered Monolith with Service Modules** — một ki�
 | **ORM** | Prisma | v5.x | Type-safe query, migration rõ ràng, hỗ trợ tốt với PostgreSQL | ADR-03 |
 | **Database** | SQLite (current implementation) | Prisma 5 connector | Writer reservation + atomic mutations; PostgreSQL remains a target design | [FIX-08](concurrency.md) |
 | **Authentication** | JWT (Access + Refresh Token) | — | Stateless, dễ implement RBAC qua payload `role` | ADR-05 |
-| **AI Service** | Google Gemini API | gemini-1.5-flash | Free tier đủ dùng cho demo, context window lớn, JSON output mode | ADR-06 |
+| **AI Service** | Google Gemini API | gemini-3.8-flash | JSON output mode; model khả dụng cho backend key | ADR-06 |
 | **PDF Export** | Puppeteer / html-pdf | Puppeteer 22 | Render HTML template thành PDF, hỗ trợ tiếng Việt, không cần font external | — |
 | **In-app Notification** | Server-Sent Events (SSE) | — | Đơn giản hơn WebSocket, đủ dùng cho push notification một chiều | ADR-07 |
 | **Runtime Environment** | Node.js, chạy local / VPS | — | Không cloud-managed services để giảm chi phí và độ phức tạp cho demo | — |
@@ -164,7 +164,7 @@ graph TB
     end
 
     subgraph EXTERNAL["EXTERNAL SERVICES"]
-        GEMINI["Google Gemini API\n(gemini-1.5-flash)"]
+        GEMINI["Google Gemini API\n(gemini-3.8-flash)"]
     end
 
     %% Client → Network
@@ -527,7 +527,7 @@ Các bảng chính (xem `data-model.md` để biết chi tiết cột):
 
 ### 5.5 AI Service (External)
 
-**Công nghệ:** Google Gemini API (gemini-1.5-flash)
+**Công nghệ:** Google Gemini API (gemini-3.8-flash)
 
 - Được gọi từ `AIService` trên server, **client không gọi trực tiếp**.
 - API Key lưu trong `.env`, không bao giờ expose ra frontend.
@@ -932,7 +932,7 @@ stateDiagram-v2
 | **Ngày** | 2026-08-28 |
 | **Trạng thái** | Accepted |
 | **Bối cảnh** | REQ-TR-02 yêu cầu AI sinh itinerary. BR-TR-07 yêu cầu server-side guardrail chặn vượt budget. NFR-TR-02 yêu cầu ≤5s. Dự án là demo/academic. |
-| **Quyết định** | Google Gemini API (gemini-1.5-flash) với JSON mode. |
+| **Quyết định** | Google Gemini API (gemini-3.8-flash) với JSON mode. |
 | **Alternatives đã cân nhắc** | OpenAI GPT-4o (có chi phí, không free tier tốt), local LLM (latency cao, setup phức tạp), hardcoded mock (không thỏa mãn tính năng AI thật). |
 | **Hệ quả** | Gemini Flash có free tier đủ dùng cho demo. JSON mode đảm bảo output parseable. Guardrail được implement server-side nên AI provider có thể thay đổi sau này mà không ảnh hưởng business rule. Rủi ro: phụ thuộc third-party API, cần timeout và fallback. |
 

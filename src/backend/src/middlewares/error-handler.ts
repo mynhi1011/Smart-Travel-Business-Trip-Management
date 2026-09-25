@@ -89,11 +89,25 @@ export const Errors = {
       'AI_BUDGET_GUARDRAIL_FAILED',
       'Không thể tạo lịch trình trong ngân sách. Vui lòng điều chỉnh ngân sách.'
     ),
+  AI_PROVIDER_RATE_LIMITED: () =>
+    new AppError(
+      429,
+      'AI_PROVIDER_RATE_LIMITED',
+      'Gemini đang giới hạn số yêu cầu. Vui lòng chờ một lúc rồi thử lại.'
+    ),
   EXPENSE_VARIANCE_EXCEEDED: (variancePct: number) =>
     new AppError(
       422,
       'EXPENSE_VARIANCE_EXCEEDED',
       `Chi phí thực tế vượt dự toán ${variancePct.toFixed(1)}%, cần Manager phê duyệt bổ sung.`
+    ),
+
+  // 503
+  AI_PROVIDER_UNAVAILABLE: () =>
+    new AppError(
+      503,
+      'AI_PROVIDER_UNAVAILABLE',
+      'Gemini đang tạm thời quá tải hoặc không khả dụng. Dữ liệu chuyến đi vẫn được giữ; vui lòng thử sinh lại sau.'
     ),
 
   // 500

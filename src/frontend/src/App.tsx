@@ -1398,6 +1398,7 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
   const [aiApplied, setAiApplied] = useState(false);
   const aiApplyKey = useRef<string | null>(null);
   const [aiError, setAiError] = useState("");
+  const [aiPreferences, setAiPreferences] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [submitResult, setSubmitResult] = useState<{ requiresLevel2: boolean; reasons: string[] } | null>(null);
@@ -1652,6 +1653,18 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
               {!aiGenerated ? (
                 <div>
                   <p className="text-sm text-gray-500 mb-5">Hệ thống sẽ gợi ý lịch trình dựa trên điểm đến, số ngày và ngân sách bạn nhập.</p>
+                  <div className="mb-4">
+                    <FieldLabel>Ưu tiên lịch trình (không bắt buộc)</FieldLabel>
+                    <textarea
+                      value={aiPreferences}
+                      onChange={event => setAiPreferences(event.target.value)}
+                      maxLength={500}
+                      rows={2}
+                      placeholder="Ví dụ: ưu tiên họp buổi sáng, tránh di chuyển xa"
+                      className="w-full border border-gray-200 rounded-lg px-3.5 py-2.5 text-sm text-[#1b2f35] placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#1b2f35] resize-none"
+                    />
+                    <p className="mt-1 text-right text-xs text-gray-400">{aiPreferences.length}/500</p>
+                  </div>
                   {!canGenerateAI && (
                     <div className="mb-4 px-3.5 py-3 rounded-lg border border-amber-200 bg-amber-50 text-xs text-amber-700">
                       Vui lòng điền đầy đủ thông tin chuyến đi ở bước 1 trước khi sinh lịch trình AI.
@@ -1662,32 +1675,34 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
                     setGenerating(true);
                     setAiError("");
                     try {
-                      // BUG-06: Tạo trip DRAFT trước nếu chưa có, để lấy tripId gọi AI
+                      const [dd1, mm1, yyyy1] = form.departDate.split("/");
+                      const [dd2, mm2, yyyy2] = form.returnDate.split("/");
+                      const tripPayload = {
+                        origin: form.from.trim(),
+                        destination: form.to.trim(),
+                        departureDate: `${yyyy1}-${mm1}-${dd1}`,
+                        returnDate: `${yyyy2}-${mm2}-${dd2}`,
+                        purpose: form.purpose.trim(),
+                        estimatedBudget: budget,
+                        ...(form.urgent || isLateSubmission
+                          ? { urgencyReason: form.urgentReason.trim() || undefined }
+                          : {}),
+                      };
+
+                      // Persist the current form before AI reads its Trip context.
                       let tripId = draftTripId;
                       if (!tripId) {
-                        const [dd1, mm1, yyyy1] = form.departDate.split("/");
-                        const [dd2, mm2, yyyy2] = form.returnDate.split("/");
-                        // D-16: server tự tính destinationType
-                        const created = await createTrip({
-                          origin: form.from,
-                          destination: form.to,
-                          departureDate: `${yyyy1}-${mm1}-${dd1}`,
-                          returnDate: `${yyyy2}-${mm2}-${dd2}`,
-                          purpose: form.purpose,
-                          estimatedBudget: budget,
-                          ...(form.urgent || isLateSubmission
-                            ? { urgencyReason: form.urgentReason || undefined }
-                            : {}),
-                        });
+                        const created = await createTrip(tripPayload);
                         tripId = created.id;
                         setDraftTripId(tripId);
-                      }
+                      } else await updateTrip(tripId, tripPayload);
                       // Gọi AI API thật (POST /ai/generate-itinerary)
                       const result = await generateAiItinerary({
                         tripId,
-                        destination: form.to,
+                        destination: form.to.trim(),
                         days: tripDays,
                         budget,
+                        ...(aiPreferences.trim() ? { preferences: aiPreferences.trim() } : {}),
                       });
                       setAiItinerary(aiItemsToItineraryDays(result.items));
                       setAiItems(result.items);

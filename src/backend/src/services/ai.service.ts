@@ -11,6 +11,7 @@
 import prisma from '../prisma/client';
 import { Errors } from '../middlewares/error-handler';
 import { generateItinerary } from '../lib/ai.client';
+import { HOTEL_LIMIT_PER_NIGHT, PER_DIEM_RATE } from './policyRules';
 import type { GenerateItineraryRequest } from '../utils/validators/ai.validator';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -46,15 +47,24 @@ export async function generateItineraryDraft(
     where: { id: input.tripId },
     select: {
       employeeId: true,
+      origin: true,
       destination: true,
       departureDate: true,
       returnDate: true,
       purpose: true,
       status: true,
+      destinationType: true,
+      employee: { select: { jobGrade: true } },
     },
   });
   if (!trip) throw Errors.TRIP_NOT_FOUND();
   if (trip.employeeId !== userId) throw Errors.NOT_OWNER();
+  if (input.destination.trim() !== trip.destination.trim()) {
+    throw Errors.VALIDATION_ERROR({
+      fieldErrors: { destination: ['Điểm đến phải khớp với Trip Request đã lưu'] },
+      formErrors: [],
+    });
+  }
 
   // 2. Trip CLOSED là immutable (BR-TR-06) — sau kiểm tra authorization
   if (trip.status === 'CLOSED') throw Errors.TRIP_IMMUTABLE();
@@ -73,16 +83,21 @@ export async function generateItineraryDraft(
   // 4. Gọi AI client với validated context (departureDate lấy từ trip — nguồn tin cậy)
   const departureDate = dep.toISOString().slice(0, 10);
   const draft = await generateItinerary({
-    destination: input.destination,
+    origin: trip.origin,
+    destination: trip.destination,
     days: input.days,
     budget: input.budget,
     departureDate,
+    returnDate: ret.toISOString().slice(0, 10),
     purpose: trip.purpose,
+    preferences: input.preferences,
+    hotelLimitPerNight: HOTEL_LIMIT_PER_NIGHT[trip.employee.jobGrade],
+    perDiemPerDay: PER_DIEM_RATE[trip.destinationType],
   });
 
   // 5. Normalize response theo API contract (API.md §10: itemDate, budgetCap)
   return {
-    destination: input.destination,
+    destination: trip.destination,
     days: input.days,
     totalEstimatedCost: draft.totalEstimatedCost,
     budgetCap: input.budget,
