@@ -631,7 +631,7 @@ function auditActionLabel(action: string): string {
   return labels[action] ?? action;
 }
 
-function TripCard({ trip, onClick, cta }: { trip: Trip; onClick?: () => void; cta?: string }) {
+function TripCard({ trip, onClick, cta, onAction }: { trip: Trip; onClick?: () => void; cta?: string; onAction?: () => void }) {
   return (
     <Card className={onClick ? "hover:shadow-md transition-shadow cursor-pointer" : ""}>
       <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3" onClick={onClick}>
@@ -651,7 +651,7 @@ function TripCard({ trip, onClick, cta }: { trip: Trip; onClick?: () => void; ct
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
-          {cta && <span className="text-xs text-emerald-600 font-medium">{cta}</span>}
+          {cta && (onAction ? <button onClick={event => { event.stopPropagation(); onAction(); }} className="text-xs text-emerald-600 font-medium hover:underline">{cta}</button> : <span className="text-xs text-emerald-600 font-medium">{cta}</span>)}
           <StatusBadge status={trip.status} violations={trip.policyViolations} />
         </div>
       </div>
@@ -1263,15 +1263,17 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const { trips, reload } = useTrips();
   const [searchParams, setSearchParams] = useSearchParams();
   const draftTripIdFromUrl = searchParams.get("draftTripId");
-  const [screen, setScreen] = useState<"dashboard" | "create" | "success" | "itinerary" | "status" | "expense">(draftTripIdFromUrl ? "create" : "dashboard");
+  const detailTripIdFromUrl = searchParams.get("tripId");
+  const [screen, setScreen] = useState<"dashboard" | "create" | "success" | "itinerary" | "status" | "expense">(draftTripIdFromUrl ? "create" : detailTripIdFromUrl ? "status" : "dashboard");
   const [selected, setSelected] = useState<Trip | null>(null);
   const [filter, setFilter] = useState<TripStatus | "all">("all");
   const myTrips = trips;
+  const routeTrip = detailTripIdFromUrl ? trips.find(t => t.id === detailTripIdFromUrl) ?? null : null;
 
   if (screen === "create")    return <EmpCreate user={user} onLogout={onLogout} initialDraftTripId={draftTripIdFromUrl} onSuccess={() => { void reload(); setSearchParams({}); setScreen("success"); }} onSaveDraft={() => { void reload(); setSearchParams({}); setScreen("dashboard"); }} onCancel={() => { setSearchParams({}); setScreen("dashboard"); }} />;
   if (screen === "success")   return <EmpSuccess user={user} onLogout={onLogout} onBack={() => setScreen("dashboard")} />;
   if (screen === "itinerary" && selected) return <EmpItinerary user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} />;
-  if (screen === "status"    && selected) return <EmpStatus    user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} />;
+  if (screen === "status"    && (selected || routeTrip)) return <EmpStatus    user={user} onLogout={onLogout} trip={selected ?? routeTrip!} onBack={() => { setSearchParams({}); setScreen("dashboard"); }} />;
   if (screen === "expense"   && selected) return <EmpExpense   user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} onSave={async () => { await reload(); setScreen("dashboard"); }} />;
 
   const filtered = myTrips.filter(t => filter === "all" || t.status === filter);
@@ -1357,10 +1359,10 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             <Card key={trip.id} className="hover:shadow-md transition-shadow cursor-pointer">
               <div
                 className="px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
-                onClick={() => { setSelected(trip); setScreen("status"); }}
+                onClick={() => { setSelected(trip); setSearchParams({ tripId: trip.id }); setScreen("status"); }}
                 role="button"
                 tabIndex={0}
-                onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelected(trip); setScreen("status"); } }}
+                onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelected(trip); setSearchParams({ tripId: trip.id }); setScreen("status"); } }}
               >
                 <div>
                   <div className="flex items-center gap-2 text-base font-bold text-[#1b2f35] mb-1">
@@ -2236,9 +2238,12 @@ function EmpExpense({ user, onLogout, trip, onBack, onSave }: {
 
 function ManagerApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const { trips, reload } = useTrips();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const detailTripId = searchParams.get("tripId");
   // BUG-10: Lấy dashboard stats từ backend API thay vì tự tính
   const { data: dash, reload: reloadDash } = useDashboard<ManagerDashboard>();
   const [selected, setSelected] = useState<Trip | null>(null);
+  const [managerTab, setManagerTab] = useState<"queue" | "additional" | "recent">("queue");
 
   const queue      = trips.filter(t => t.status === "SUBMITTED");
   const addlQueue  = trips.filter(t => t.status === "PENDING_MANAGER_ADDITIONAL_APPROVAL");
@@ -2259,6 +2264,7 @@ function ManagerApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   }
 
   const [addlSelected, setAddlSelected] = useState<Trip | null>(null);
+  const detailTrip = detailTripId ? trips.find(t => t.id === detailTripId) : null;
 
   async function approveAdditional(note: string) {
     if (!addlSelected || !note.trim()) return;
@@ -2267,6 +2273,7 @@ function ManagerApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     setAddlSelected(null);
   }
 
+  if (detailTrip) return <EmpStatus user={user} onLogout={onLogout} trip={detailTrip} onBack={() => setSearchParams({})} />;
   if (selected) return <ApprovalDetail user={user} onLogout={onLogout} trip={selected} level={1} onApprove={approve} onReject={reject} onBack={() => setSelected(null)} />;
   if (addlSelected) return <ApprovalDetail user={user} onLogout={onLogout} trip={addlSelected} level={1} onApprove={approveAdditional} onReject={async (note) => { try { await rejectExpense(addlSelected.id, note); await reload(); void reloadDash(); } catch(err) { alert(err instanceof Error ? err.message : "Lỗi."); } setAddlSelected(null); }} onBack={() => setAddlSelected(null)} additionalApproval />;
 
@@ -2289,30 +2296,12 @@ function ManagerApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             <Card key={String(k)} className="p-4"><p className="text-xs text-gray-400 mb-1">{k}</p><p className={`text-2xl font-bold ${c}`}>{v}</p></Card>
           ))}
         </div>
-        {addlQueue.length > 0 && (
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <p className="text-base font-semibold text-orange-700">Duyệt bổ sung chi phí</p>
-              <span className="bg-orange-100 text-orange-700 text-xs font-semibold px-2 py-0.5 rounded-full">{addlQueue.length}</span>
-            </div>
-            <div className="mb-2 text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">Chi phí thực tế vượt dự toán &gt;10% — hồ sơ đã được chuyển THẲNG cho Manager duyệt bổ sung ngay khi nhân viên nộp.</div>
-            <div className="flex flex-col gap-3">{addlQueue.map(t => <TripCard key={t.id} trip={t} cta="Duyệt bổ sung" onClick={() => setAddlSelected(t)} />)}</div>
-          </section>
-        )}
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <p className="text-base font-semibold text-[#1b2f35]">Chờ phê duyệt Cấp 1</p>
-            <span className="bg-amber-100 text-amber-700 text-xs font-semibold px-2 py-0.5 rounded-full">{queue.length}</span>
-          </div>
-          {queue.length === 0 && <div className="text-sm text-gray-400 py-8 text-center bg-white rounded-xl border border-gray-200">Không có yêu cầu nào đang chờ.</div>}
-          <div className="flex flex-col gap-3">{queue.map(t => <TripCard key={t.id} trip={t} cta="Xem & duyệt" onClick={() => setSelected(t)} />)}</div>
-        </section>
-        {recent.length > 0 && (
-          <section>
-            <p className="text-sm font-bold text-[#1b2f35] mb-3">Đã xử lý gần đây</p>
-            <div className="flex flex-col gap-3">{recent.map(t => <TripCard key={t.id} trip={t} />)}</div>
-          </section>
-        )}
+        <div className="flex gap-0 overflow-x-auto border-b border-gray-200">
+          {[["queue", `Chờ duyệt cấp 1 (${queue.length})`], ["additional", `Duyệt bổ sung (${addlQueue.length})`], ["recent", `Đã xử lý (${recent.length})`]].map(([key, label]) => <button key={key} onClick={() => setManagerTab(key as typeof managerTab)} className={`whitespace-nowrap px-4 pb-3 text-sm font-medium -mb-px border-b-2 ${managerTab === key ? "border-amber-500 text-amber-700" : "border-transparent text-gray-400 hover:text-gray-600"}`}>{label}</button>)}
+        </div>
+        {managerTab === "additional" && <section><div className="mb-3 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-600">Chi phí vượt dự toán &gt;10% — cần Manager duyệt bổ sung.</div><div className="flex flex-col gap-3">{addlQueue.map(t => <TripCard key={t.id} trip={t} cta="Duyệt bổ sung" onClick={() => setAddlSelected(t)} onAction={() => setAddlSelected(t)} />)}</div>{addlQueue.length === 0 && <p className="py-8 text-center text-sm text-gray-400">Không có hồ sơ.</p>}</section>}
+        {managerTab === "queue" && <section><div className="flex flex-col gap-3">{queue.map(t => <TripCard key={t.id} trip={t} cta="Xem & duyệt" onClick={() => setSelected(t)} onAction={() => setSelected(t)} />)}</div>{queue.length === 0 && <p className="py-8 text-center text-sm text-gray-400">Không có yêu cầu nào đang chờ.</p>}</section>}
+        {managerTab === "recent" && <section><div className="flex flex-col gap-3">{recent.map(t => <TripCard key={t.id} trip={t} onClick={() => { setSearchParams({ tripId: t.id }); }} />)}</div>{recent.length === 0 && <p className="py-8 text-center text-sm text-gray-400">Chưa có hồ sơ đã xử lý.</p>}</section>}
       </main>
     </div>
   );
@@ -2414,6 +2403,8 @@ function ApprovalDetail({ user, onLogout, trip, level, onApprove, onReject, onBa
 
 function AdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const { trips, reload } = useTrips();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const detailTripId = searchParams.get("tripId");
   // BUG-10: Lấy dashboard stats từ backend API
   const { data: dash, reload: reloadDash } = useDashboard<TravelAdminDashboard>();
   const [selected, setSelected] = useState<Trip | null>(null);
@@ -2421,6 +2412,7 @@ function AdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 
   const queue = trips.filter(t => t.status === "PENDING_ADMIN_APPROVAL");
   const all   = trips;
+  const detailTrip = detailTripId ? trips.find(t => t.id === detailTripId) : null;
 
   async function approve(note: string) {
     if (!selected || !note.trim()) return;
@@ -2435,6 +2427,7 @@ function AdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     setSelected(null);
   }
 
+  if (detailTrip) return <EmpStatus user={user} onLogout={onLogout} trip={detailTrip} onBack={() => setSearchParams({})} />;
   if (selected) return <ApprovalDetail user={user} onLogout={onLogout} trip={selected} level={2} onApprove={approve} onReject={reject} onBack={() => setSelected(null)} />;
 
   // Stats từ /dashboard API — BUG-10
@@ -2466,7 +2459,7 @@ function AdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         </div>
         <div className="flex flex-col gap-3">
           {display.length === 0 && <p className="text-sm text-gray-400 text-center py-10 bg-white rounded-xl border border-gray-200">Không có yêu cầu nào.</p>}
-          {display.map(t => <TripCard key={t.id} trip={t} cta={t.status === "PENDING_ADMIN_APPROVAL" ? "Xem & duyệt" : undefined} onClick={t.status === "PENDING_ADMIN_APPROVAL" ? () => setSelected(t) : undefined} />)}
+          {display.map(t => <TripCard key={t.id} trip={t} cta={t.status === "PENDING_ADMIN_APPROVAL" ? "Xem & duyệt" : undefined} onClick={t.status === "PENDING_ADMIN_APPROVAL" ? () => setSelected(t) : () => { setSearchParams({ tripId: t.id }); }} onAction={t.status === "PENDING_ADMIN_APPROVAL" ? () => setSelected(t) : undefined} />)}
         </div>
       </main>
     </div>
@@ -2475,10 +2468,13 @@ function AdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 
 function FinanceApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const { trips, reload } = useTrips();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const detailTripId = searchParams.get("tripId");
   // BUG-10: Lấy dashboard stats từ backend API
   const { data: dash, reload: reloadDash } = useDashboard<FinanceDashboard>();
   const [selected, setSelected] = useState<Trip | null>(null);
   const [view, setView] = useState<"dashboard" | "expense" | "close">("dashboard");
+  const [financeTab, setFinanceTab] = useState<"settling" | "close" | "watch" | "all">("settling");
 
   const settling = trips.filter(t => t.status === "EXPENSE_SUBMITTED");
   // BR-TR-05: trip đang chờ Manager duyệt bổ sung — Finance CHỈ XEM, không có thao tác nào
@@ -2488,6 +2484,7 @@ function FinanceApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const readyToClose = trips.filter(t => t.status === "EXPENSE_APPROVED");
   // BR-TR-05: KHÔNG đưa hồ sơ chờ Manager duyệt bổ sung vào danh sách Finance xử lý
   const allFin   = trips.filter(t => ["APPROVED","TRIP_IN_PROGRESS","EXPENSE_DRAFT","EXPENSE_SUBMITTED","EXPENSE_APPROVED","CLOSED"].includes(t.status));
+  const detailTrip = detailTripId ? trips.find(t => t.id === detailTripId) : null;
 
   async function handleCloseTrip(finNote: string) {
     if (!selected) return;
@@ -2504,6 +2501,7 @@ function FinanceApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     setSelected(null); setView("dashboard");
   }
 
+  if (detailTrip) return <EmpStatus user={user} onLogout={onLogout} trip={detailTrip} onBack={() => setSearchParams({})} />;
   if (view === "expense" && selected) return <FinExpense user={user} onLogout={onLogout} trip={selected} onClose={() => setView("close")} onBack={() => { setSelected(null); setView("dashboard"); }} />;
   if (view === "close"   && selected) return <FinClose   user={user} onLogout={onLogout} trip={selected} onConfirm={handleCloseTrip} onBack={() => { setSelected(null); setView("dashboard"); }} />;
 
@@ -2522,43 +2520,13 @@ function FinanceApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             <Card key={String(k)} className="p-4"><p className="text-xs text-gray-400 mb-1">{k}</p><p className={`text-2xl font-bold ${c}`}>{v}</p></Card>
           ))}
         </div>
-        {pending.length > 0 && (
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <p className="text-base font-semibold text-orange-700">Chờ Manager duyệt bổ sung (chỉ xem)</p>
-              <span className="bg-orange-100 text-orange-700 text-xs font-semibold px-2 py-0.5 rounded-full">{pending.length}</span>
-            </div>
-            <div className="mb-2 text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">Chi phí vượt &gt;10% — hồ sơ đã chuyển cho Manager ngay khi nhân viên nộp. Finance chỉ xem, không thao tác được cho đến khi Manager duyệt bổ sung.</div>
-            <div className="flex flex-col gap-3">{pending.map(t => <TripCard key={t.id} trip={t} />)}</div>
-          </section>
-        )}
-        {settling.length > 0 && (
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <p className="text-base font-semibold text-[#1b2f35]">Chờ xét duyệt chi phí</p>
-              <span className="bg-amber-100 text-amber-700 text-xs font-semibold px-2 py-0.5 rounded-full">{settling.length}</span>
-            </div>
-            <div className="flex flex-col gap-3">{settling.map(t => <TripCard key={t.id} trip={t} cta="Xem chi phí" onClick={() => { setSelected(t); setView("expense"); }} />)}</div>
-          </section>
-        )}
-        {/* BUG-03: EXPENSE_APPROVED là trạng thái riêng — Finance đã approve nhưng chưa gọi closeTrip() */}
-        {readyToClose.length > 0 && (
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <p className="text-base font-semibold text-indigo-700">Sẵn sàng đóng hồ sơ</p>
-              <span className="bg-indigo-100 text-indigo-700 text-xs font-semibold px-2 py-0.5 rounded-full">{readyToClose.length}</span>
-            </div>
-            <div className="mb-2 text-xs text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2">Finance đã phê duyệt chi phí — nhấn "Đóng hồ sơ" để hoàn tất quy trình.</div>
-            <div className="flex flex-col gap-3">{readyToClose.map(t => <TripCard key={t.id} trip={t} cta="Đóng hồ sơ" onClick={() => { setSelected(t); setView("close"); }} />)}</div>
-          </section>
-        )}
-        <section>
-          <p className="text-sm font-bold text-[#1b2f35] mb-3">Tất cả hồ sơ</p>
-          <div className="flex flex-col gap-3">
-            {allFin.length === 0 && <p className="text-sm text-gray-400 text-center py-8 bg-white rounded-xl border border-gray-200">Chưa có hồ sơ.</p>}
-            {allFin.map(t => <TripCard key={t.id} trip={t} onClick={t.status === "EXPENSE_SUBMITTED" ? () => { setSelected(t); setView("expense"); } : t.status === "EXPENSE_APPROVED" ? () => { setSelected(t); setView("close"); } : undefined} />)}
-          </div>
-        </section>
+        <div className="flex gap-0 overflow-x-auto border-b border-gray-200">
+          {[["settling", `Chờ quyết toán (${settling.length})`], ["close", `Chờ đóng hồ sơ (${readyToClose.length})`], ["watch", `Đang theo dõi (${pending.length})`], ["all", `Tất cả (${allFin.length})`]].map(([key, label]) => <button key={key} onClick={() => setFinanceTab(key as typeof financeTab)} className={`whitespace-nowrap px-4 pb-3 text-sm font-medium -mb-px border-b-2 ${financeTab === key ? "border-indigo-500 text-indigo-700" : "border-transparent text-gray-400 hover:text-gray-600"}`}>{label}</button>)}
+        </div>
+        {financeTab === "settling" && <section><div className="flex flex-col gap-3">{settling.map(t => <TripCard key={t.id} trip={t} cta="Xem chi phí" onClick={() => { setSelected(t); setView("expense"); }} onAction={() => { setSelected(t); setView("expense"); }} />)}</div>{settling.length === 0 && <p className="py-8 text-center text-sm text-gray-400">Không có hồ sơ chờ quyết toán.</p>}</section>}
+        {financeTab === "close" && <section><div className="mb-3 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-600">Finance đã phê duyệt chi phí — có thể đóng hồ sơ.</div><div className="flex flex-col gap-3">{readyToClose.map(t => <TripCard key={t.id} trip={t} cta="Đóng hồ sơ" onClick={() => { setSelected(t); setView("close"); }} onAction={() => { setSelected(t); setView("close"); }} />)}</div>{readyToClose.length === 0 && <p className="py-8 text-center text-sm text-gray-400">Không có hồ sơ chờ đóng.</p>}</section>}
+        {financeTab === "watch" && <section><div className="mb-3 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-600">Finance chỉ xem các hồ sơ đang chờ Manager duyệt bổ sung.</div><div className="flex flex-col gap-3">{pending.map(t => <TripCard key={t.id} trip={t} onClick={() => { setSearchParams({ tripId: t.id }); }} />)}</div>{pending.length === 0 && <p className="py-8 text-center text-sm text-gray-400">Không có hồ sơ đang theo dõi.</p>}</section>}
+        {financeTab === "all" && <section><div className="flex flex-col gap-3">{allFin.map(t => <TripCard key={t.id} trip={t} cta={t.status === "EXPENSE_SUBMITTED" ? "Xem chi phí" : t.status === "EXPENSE_APPROVED" ? "Đóng hồ sơ" : undefined} onClick={t.status === "EXPENSE_SUBMITTED" ? () => { setSelected(t); setView("expense"); } : t.status === "EXPENSE_APPROVED" ? () => { setSelected(t); setView("close"); } : () => { setSearchParams({ tripId: t.id }); }} onAction={t.status === "EXPENSE_SUBMITTED" ? () => { setSelected(t); setView("expense"); } : t.status === "EXPENSE_APPROVED" ? () => { setSelected(t); setView("close"); } : undefined} />)}</div>{allFin.length === 0 && <p className="py-8 text-center text-sm text-gray-400">Chưa có hồ sơ.</p>}</section>}
       </main>
     </div>
   );

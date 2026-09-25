@@ -110,7 +110,9 @@ export function createApp(): Application {
 
   // ── 8. API Routes (/api/v1/*) ──────────────────────────────────────────────
   // Auth routes — public (với authLimiter riêng)
-  app.use('/api/v1/auth', authLimiter, authRouter);
+  // Chỉ giới hạn đăng nhập; refresh/me/logout không phải lần thử mật khẩu.
+  app.post('/api/v1/auth/login', authLimiter);
+  app.use('/api/v1/auth', authRouter);
 
   // Protected routes — authGuard được apply bên trong từng router
   app.use('/api/v1/trips', tripsRouter);
