@@ -1,7 +1,7 @@
 ﻿import { useState, useRef, useEffect } from "react";
-import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { Navigate, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, authApi, getAccessToken, type BackendUser } from "./services/api";
-import { listTrips, createTrip, updateTrip, submitTrip, approveTrip, rejectTrip, closeTrip, startTrip, endTrip, type BackendTrip, type ApprovalReason, type Level1Approval } from "./services/trips";
+import { listTrips, createTrip, updateTrip, getTripById, submitTrip, approveTrip, rejectTrip, closeTrip, startTrip, endTrip, type BackendTrip, type ApprovalReason, type Level1Approval } from "./services/trips";
 import { ApprovalReasonsBanner, TwoLevelBadge } from "./components/ApprovalReasonsBanner";
 import { generateItinerary as generateAiItinerary, type AiItineraryItem } from "./services/ai";
 import {
@@ -1243,12 +1243,14 @@ function VarianceTable({ items }: { items: ExpenseItem[] }) {
 
 function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const { trips, reload } = useTrips();
-  const [screen, setScreen] = useState<"dashboard" | "create" | "success" | "itinerary" | "status" | "expense">("dashboard");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const draftTripIdFromUrl = searchParams.get("draftTripId");
+  const [screen, setScreen] = useState<"dashboard" | "create" | "success" | "itinerary" | "status" | "expense">(draftTripIdFromUrl ? "create" : "dashboard");
   const [selected, setSelected] = useState<Trip | null>(null);
   const [filter, setFilter] = useState<TripStatus | "all">("all");
   const myTrips = trips;
 
-  if (screen === "create")    return <EmpCreate user={user} onLogout={onLogout} onSuccess={() => { void reload(); setScreen("success"); }} onSaveDraft={() => { void reload(); setScreen("dashboard"); }} onCancel={() => setScreen("dashboard")} />;
+  if (screen === "create")    return <EmpCreate user={user} onLogout={onLogout} initialDraftTripId={draftTripIdFromUrl} onSuccess={() => { void reload(); setSearchParams({}); setScreen("success"); }} onSaveDraft={() => { void reload(); setSearchParams({}); setScreen("dashboard"); }} onCancel={() => { setSearchParams({}); setScreen("dashboard"); }} />;
   if (screen === "success")   return <EmpSuccess user={user} onLogout={onLogout} onBack={() => setScreen("dashboard")} />;
   if (screen === "itinerary" && selected) return <EmpItinerary user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} />;
   if (screen === "status"    && selected) return <EmpStatus    user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} />;
@@ -1259,7 +1261,7 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Nav user={user} onLogout={onLogout} />
-      <PageHeader label="Employee Dashboard" title="Chuyến công tác của bạn" subtitle="Theo dõi, tạo mới hoặc khai báo chi phí thực tế." action={<button onClick={() => setScreen("create")} className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold px-4 py-2.5 rounded-lg shadow-sm transition-colors">+ Tạo Trip Request</button>} />
+      <PageHeader label="Employee Dashboard" title="Chuyến công tác của bạn" subtitle="Theo dõi, tạo mới hoặc khai báo chi phí thực tế." action={<button onClick={() => { setSearchParams({}); setScreen("create"); }} className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold px-4 py-2.5 rounded-lg shadow-sm transition-colors">+ Tạo Trip Request</button>} />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
         {/* ── Status filter tab bar ── */}
         <div className="mb-5 bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -1334,8 +1336,14 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         <div className="flex flex-col gap-3">
           {filtered.length === 0 && <p className="text-sm text-gray-400 text-center py-12">Không có chuyến công tác nào.</p>}
           {filtered.map(trip => (
-            <Card key={trip.id} className="hover:shadow-md transition-shadow">
-              <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <Card key={trip.id} className="hover:shadow-md transition-shadow cursor-pointer">
+              <div
+                className="px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+                onClick={() => { setSelected(trip); setScreen("status"); }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelected(trip); setScreen("status"); } }}
+              >
                 <div>
                   <div className="flex items-center gap-2 text-base font-bold text-[#1b2f35] mb-1">
                     <span>{trip.from}</span><span className="text-emerald-500">→</span><span>{trip.to}</span>
@@ -1348,30 +1356,29 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  <button onClick={() => { setSelected(trip); setScreen("status"); }} className="text-sm font-medium text-gray-600 border border-gray-200 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition-colors">Trạng thái</button>
                   {trip.status === "DRAFT" && (
-                    <button onClick={() => setScreen("create")} className="text-sm font-medium text-zinc-700 border border-zinc-300 hover:bg-zinc-50 px-3 py-1.5 rounded-lg transition-colors">Tiếp tục soạn thảo</button>
+                    <button onClick={event => { event.stopPropagation(); setSearchParams({ draftTripId: trip.id }); setScreen("create"); }} className="text-sm font-medium text-zinc-700 border border-zinc-300 hover:bg-zinc-50 px-3 py-1.5 rounded-lg transition-colors">Tiếp tục soạn thảo</button>
                   )}
                   {trip.status === "APPROVED" && (
                     <>
-                      <button onClick={() => { setSelected(trip); setScreen("itinerary"); }} className="text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors">Lịch trình</button>
-                      <button onClick={() => { void (async () => { try { await startTrip(trip.id); await reload(); } catch (err) { alert(err instanceof Error ? err.message : "Không thể bắt đầu chuyến đi."); } })(); }} className="text-sm font-medium text-cyan-700 border border-cyan-200 hover:bg-cyan-50 px-3 py-1.5 rounded-lg transition-colors">Bắt đầu chuyến đi</button>
+                      <button onClick={event => { event.stopPropagation(); setSelected(trip); setScreen("itinerary"); }} className="text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors">Lịch trình</button>
+                      <button onClick={event => { event.stopPropagation(); void (async () => { try { await startTrip(trip.id); await reload(); } catch (err) { alert(err instanceof Error ? err.message : "Không thể bắt đầu chuyến đi."); } })(); }} className="text-sm font-medium text-cyan-700 border border-cyan-200 hover:bg-cyan-50 px-3 py-1.5 rounded-lg transition-colors">Bắt đầu chuyến đi</button>
                     </>
                   )}
                   {trip.status === "TRIP_IN_PROGRESS" && (
                     <>
-                      <button onClick={() => { setSelected(trip); setScreen("itinerary"); }} className="text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors">Lịch trình</button>
-                      <button onClick={() => { void (async () => { try { await endTrip(trip.id); await reload(); } catch (err) { alert(err instanceof Error ? err.message : "Không thể kết thúc chuyến đi."); } })(); }} className="text-sm font-medium text-cyan-700 border border-cyan-200 hover:bg-cyan-50 px-3 py-1.5 rounded-lg transition-colors">Kết thúc chuyến đi</button>
+                      <button onClick={event => { event.stopPropagation(); setSelected(trip); setScreen("itinerary"); }} className="text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors">Lịch trình</button>
+                      <button onClick={event => { event.stopPropagation(); void (async () => { try { await endTrip(trip.id); await reload(); } catch (err) { alert(err instanceof Error ? err.message : "Không thể kết thúc chuyến đi."); } })(); }} className="text-sm font-medium text-cyan-700 border border-cyan-200 hover:bg-cyan-50 px-3 py-1.5 rounded-lg transition-colors">Kết thúc chuyến đi</button>
                     </>
                   )}
                   {trip.status === "EXPENSE_DRAFT" && (
                     <>
-                      <button onClick={() => { setSelected(trip); setScreen("itinerary"); }} className="text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors">Lịch trình</button>
-                      <button onClick={() => { setSelected(trip); setScreen("expense"); }} className="text-sm font-medium text-purple-700 border border-purple-200 hover:bg-purple-50 px-3 py-1.5 rounded-lg transition-colors">Khai chi phí</button>
+                      <button onClick={event => { event.stopPropagation(); setSelected(trip); setScreen("itinerary"); }} className="text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors">Lịch trình</button>
+                      <button onClick={event => { event.stopPropagation(); setSelected(trip); setScreen("expense"); }} className="text-sm font-medium text-purple-700 border border-purple-200 hover:bg-purple-50 px-3 py-1.5 rounded-lg transition-colors">Khai chi phí</button>
                     </>
                   )}
                   {(trip.status === "EXPENSE_SUBMITTED" || trip.status === "PENDING_MANAGER_ADDITIONAL_APPROVAL" || trip.status === "EXPENSE_APPROVED" || trip.status === "CLOSED") && (
-                    <button onClick={() => { setSelected(trip); setScreen("expense"); }} className="text-sm font-medium text-gray-600 border border-gray-200 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition-colors">{trip.status === "CLOSED" || trip.status === "EXPENSE_APPROVED" ? "Xem chi phí" : "Xem báo cáo"}</button>
+                    <button onClick={event => { event.stopPropagation(); setSelected(trip); setScreen("expense"); }} className="text-sm font-medium text-gray-600 border border-gray-200 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition-colors">{trip.status === "CLOSED" || trip.status === "EXPENSE_APPROVED" ? "Xem chi phí" : "Xem báo cáo"}</button>
                   )}
                   <StatusBadge status={trip.status} violations={trip.policyViolations} />
                 </div>
@@ -1384,14 +1391,15 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   );
 }
 
-function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
-  user: User; onLogout: () => void; onSuccess: () => void; onSaveDraft: () => void; onCancel: () => void;
+function EmpCreate({ user, onLogout, initialDraftTripId, onSuccess, onSaveDraft, onCancel }: {
+  user: User; onLogout: () => void; initialDraftTripId: string | null; onSuccess: () => void; onSaveDraft: () => void; onCancel: () => void;
 }) {
   const [step, setStep] = useState(0);
   const [aiGenerated, setAiGenerated] = useState(false);
   const [generating, setGenerating] = useState(false);
   // BUG-06: state lưu tripId sau khi tạo DRAFT và itinerary thật từ AI
-  const [draftTripId, setDraftTripId] = useState<string | null>(null);
+  const [draftTripId, setDraftTripId] = useState<string | null>(initialDraftTripId);
+  const [loadingDraft, setLoadingDraft] = useState(Boolean(initialDraftTripId));
   const [aiItinerary, setAiItinerary] = useState<ItineraryDay[]>([]);
   const [aiItems, setAiItems] = useState<AiItineraryItem[]>([]);
   const [applyingAi, setApplyingAi] = useState(false);
@@ -1404,6 +1412,40 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
   const [submitResult, setSubmitResult] = useState<{ requiresLevel2: boolean; reasons: string[] } | null>(null);
   const [form, setForm] = useState({ from: "", to: "", departDate: "", returnDate: "", purpose: "", budget: "", urgent: false, urgentReason: "" });
   const [errs, setErrs] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!initialDraftTripId) {
+      setDraftTripId(null);
+      setLoadingDraft(false);
+      return;
+    }
+
+    let mounted = true;
+    setDraftTripId(initialDraftTripId);
+    setLoadingDraft(true);
+    void getTripById(initialDraftTripId).then((trip) => {
+      if (!mounted) return;
+      const toDMY = (value: string) => {
+        const [yyyy, mm, dd] = value.slice(0, 10).split("-");
+        return `${dd}/${mm}/${yyyy}`;
+      };
+      setForm({
+        from: trip.origin,
+        to: trip.destination,
+        departDate: toDMY(trip.departureDate),
+        returnDate: toDMY(trip.returnDate),
+        purpose: trip.purpose,
+        budget: String(trip.estimatedBudget),
+        urgent: trip.isUrgent,
+        urgentReason: trip.urgencyReason ?? "",
+      });
+    }).catch((err) => {
+      if (mounted) setSaveMsg({ ok: false, text: err instanceof Error ? err.message : "Không thể tải bản nháp." });
+    }).finally(() => {
+      if (mounted) setLoadingDraft(false);
+    });
+    return () => { mounted = false; };
+  }, [initialDraftTripId]);
   const set = (f: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setForm(v => ({ ...v, [f]: e.target.value }));
     setErrs(p => { const n = { ...p }; delete n[f]; return n; });
@@ -1576,6 +1618,7 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
       </datalist>
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7">
         <div className="border border-gray-200 rounded-xl p-6 sm:p-8 max-w-2xl mx-auto bg-white shadow-[0_6px_18px_rgba(15,23,42,0.03)]">
+          {loadingDraft && <p className="mb-5 rounded-lg bg-amber-50 px-3.5 py-3 text-sm text-amber-700">Đang tải bản nháp...</p>}
           {step === 0 && (
             <div className="flex flex-col gap-5">
               <div className="grid grid-cols-2 gap-4">
@@ -1919,6 +1962,28 @@ function EmpItinerary({ user, onLogout, trip, onBack }: { user: User; onLogout: 
 }
 
 function EmpStatus({ user, onLogout, trip, onBack }: { user: User; onLogout: () => void; trip: Trip; onBack: () => void }) {
+  const [detailTrip, setDetailTrip] = useState<Trip | null>(null);
+  const [detailLoading, setDetailLoading] = useState(true);
+  const [detailError, setDetailError] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    setDetailLoading(true);
+    setDetailError("");
+    void getTripById(trip.id)
+      .then(result => { if (mounted) setDetailTrip(toFrontendTrip(result)); })
+      .catch(() => { if (mounted) setDetailError("Không thể tải chi tiết Trip."); })
+      .finally(() => { if (mounted) setDetailLoading(false); });
+    return () => { mounted = false; };
+  }, [trip.id]);
+
+  if (detailLoading) {
+    return <div className="min-h-screen bg-gray-50 font-sans"><Nav user={user} onLogout={onLogout} /><main className="max-w-6xl mx-auto px-4 sm:px-6 py-12 text-center text-sm text-gray-400">Đang tải chi tiết Trip...</main></div>;
+  }
+  if (detailError || !detailTrip) {
+    return <div className="min-h-screen bg-gray-50 font-sans"><Nav user={user} onLogout={onLogout} /><main className="max-w-6xl mx-auto px-4 sm:px-6 py-12 text-center"><p className="text-sm text-red-500 mb-4">{detailError || "Không tìm thấy Trip."}</p><button onClick={onBack} className="text-xs text-gray-500 hover:text-gray-700">Về Dashboard</button></main></div>;
+  }
+  trip = detailTrip;
   const flow = [
     { label: "Đã nộp", desc: `Nộp lúc ${trip.submittedAt}`, done: true },
     { label: "Duyệt cấp 1 (Manager)", desc: trip.managerNote || "Chờ Manager phê duyệt", done: !!trip.managerApproved, rejected: trip.status === "REJECTED" && !trip.adminApproved },
