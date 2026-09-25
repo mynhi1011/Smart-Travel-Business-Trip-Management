@@ -8,6 +8,8 @@
  */
 
 import prisma from '../prisma/client';
+import type { Prisma } from '@prisma/client';
+import type { AfterCommit } from './mutation.service';
 import * as sseEmitter from '../lib/sse-emitter';
 
 // ─── Notification Types (data-model.md §4) ───────────────────────────────────
@@ -33,23 +35,14 @@ export interface CreateNotificationInput {
 
 // ─── Service Methods ──────────────────────────────────────────────────────────
 
-/**
- * createNotification — Lưu notification vào DB và emit SSE
- * TODO: Implement SSE emit sau khi có lib/sse-emitter.ts
- *
- * ⚠️ INVARIANT (bug P2028 — đã từng gây HTTP 500 ở submit expense):
- *   KHÔNG gọi createNotification bên trong prisma.$transaction(async (tx) => ...).
- *   Hàm này ghi bằng prisma client NGOÀI transaction; SQLite chỉ cho phép 1 writer nên
- *   statement sẽ bị treo tới khi interactive transaction hết hạn 5000ms ⇒
- *   PrismaClientKnownRequestError P2028 "Transaction already closed" ⇒ 500.
- *   Cách đúng: gọi sau khi transaction đã commit ("Phase 2" — xem expense.service.submitExpense,
- *   trip.service.submitTrip/approveTrip/rejectTrip/closeTrip).
- */
+/** Persist using the mutation tx; deliver SSE only after commit. */
 export async function createNotification(
-  input: CreateNotificationInput
+  input: CreateNotificationInput,
+  tx?: Prisma.TransactionClient,
+  afterCommit?: AfterCommit,
 ): Promise<void> {
   // 1. Lưu vào DB
-  await prisma.notification.create({
+  await (tx ?? prisma).notification.create({
     data: {
       recipientId: input.recipientId,
       type: input.type,
@@ -61,11 +54,13 @@ export async function createNotification(
   });
 
   // 2. Emit SSE event
-  sseEmitter.emit(input.recipientId, {
+  const deliver = () => sseEmitter.emit(input.recipientId, {
     type:        input.type,
     referenceId: input.referenceId,
     message:     input.message,
   });
+  if (afterCommit) afterCommit(deliver);
+  else deliver();
 }
 
 /**

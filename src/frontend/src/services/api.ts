@@ -2,6 +2,23 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '/api/v1').replace(/\
 
 let accessToken: string | null = null;
 
+/**
+ * SESSION_KEY — sessionStorage flag để kiểm soát restore session (Hướng B).
+ *
+ * sessionStorage tồn tại trong cùng tab (kể cả F5), nhưng bị xóa khi:
+ *   - Đóng tab / đóng browser
+ *   - Mở lại localhost từ đầu (không phải F5)
+ *
+ * Lifecycle:
+ *   - Được set bởi login() sau khi server cấp token thành công
+ *   - Được remove bởi logout() khi user chủ động đăng xuất
+ *   - restoreSession() từ chối chạy nếu flag không tồn tại
+ *
+ * Backend restart không tự xóa flag, nhưng refreshAccessToken() sẽ fail
+ * (cookie revoked hoặc DB cleared) → catch trong App.tsx → hiển thị login.
+ */
+const SESSION_KEY = 'st_session_active';
+
 export interface ApiErrorBody {
   error?: string;
   message?: string;
@@ -94,10 +111,18 @@ export const authApi = {
       skipRefresh: true,
     });
     setAccessToken(result.accessToken);
+    // Hướng B: đánh dấu session active trong sessionStorage
+    // sessionStorage tồn tại qua F5 nhưng mất khi đóng tab/browser hoặc restart localhost
+    sessionStorage.setItem(SESSION_KEY, '1');
     return result.user;
   },
 
   async restoreSession(): Promise<BackendUser> {
+    // Hướng B: chỉ restore nếu tab này đã từng login trong phiên hiện tại
+    // Flag vắng mặt = đóng tab, đóng browser, hoặc restart localhost → buộc login lại
+    if (!sessionStorage.getItem(SESSION_KEY)) {
+      throw new Error('No active session');
+    }
     await refreshAccessToken();
     return request<BackendUser>('/auth/me');
   },
@@ -107,6 +132,8 @@ export const authApi = {
       await request<void>('/auth/logout', { method: 'DELETE', skipRefresh: true });
     } finally {
       setAccessToken(null);
+      // Xóa flag để tab này không tự restore session sau khi logout
+      sessionStorage.removeItem(SESSION_KEY);
     }
   },
 };

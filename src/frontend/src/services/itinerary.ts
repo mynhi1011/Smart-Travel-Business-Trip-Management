@@ -37,6 +37,7 @@ export interface ItineraryItemInput {
   estimatedCost?: number;
   notes?: string;
   sortOrder?: number;
+  isAiGenerated?: boolean;
 }
 
 // ─── API calls ───────────────────────────────────────────────────────────────
@@ -49,10 +50,25 @@ export async function getItinerary(tripId: string): Promise<ItineraryResponse> {
 export async function addItineraryItem(
   tripId: string,
   input: ItineraryItemInput,
+  requestKey: string = crypto.randomUUID(),
 ): Promise<BackendItineraryItem> {
   const res = await apiRequest<{ data: BackendItineraryItem }>(`/trips/${tripId}/itinerary`, {
     method: 'POST',
     body: JSON.stringify(input),
+    headers: { 'Idempotency-Key': requestKey },
+  });
+  return res.data;
+}
+
+export async function addBatchItineraryItems(
+  tripId: string,
+  items: ItineraryItemInput[],
+  requestKey: string = crypto.randomUUID(),
+): Promise<BackendItineraryItem[]> {
+  const res = await apiRequest<{ data: BackendItineraryItem[] }>(`/trips/${tripId}/itinerary`, {
+    method: 'POST',
+    body: JSON.stringify({ items }),
+    headers: { 'Idempotency-Key': requestKey },
   });
   return res.data;
 }

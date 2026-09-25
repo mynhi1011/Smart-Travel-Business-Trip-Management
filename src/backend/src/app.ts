@@ -62,7 +62,7 @@ export function createApp(): Application {
       },
       credentials: true, // Cần thiết cho httpOnly cookie (Refresh Token - architecture.md §6)
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
     })
   );
 

@@ -14,7 +14,12 @@ export async function getItinerary(req: Request, res: Response, next: NextFuncti
 export async function addItineraryItem(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     if (!req.user) { next(Errors.UNAUTHORIZED()); return; }
-    const item = await svc.addItineraryItem(req.params['id'] ?? '', req.user.id, req.body as svc.ItineraryItemInput);
+    if (req.body && 'items' in req.body) {
+      const items = await svc.addBatchItineraryItems(req.params['id'] ?? '', req.user.id, req.body.items, req.get('Idempotency-Key'));
+      sendCreated(res, items);
+      return;
+    }
+    const item = await svc.addItineraryItem(req.params['id'] ?? '', req.user.id, req.body as svc.ItineraryItemInput, false, req.get('Idempotency-Key'));
     sendCreated(res, item);
   } catch (err) { next(err); }
 }

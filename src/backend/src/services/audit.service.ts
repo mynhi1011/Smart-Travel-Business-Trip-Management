@@ -8,6 +8,7 @@
  */
 
 import prisma from '../prisma/client';
+import type { Prisma } from '@prisma/client';
 
 // ─── Audit Entity Types (data-model.md §4) ───────────────────────────────────
 
@@ -39,6 +40,9 @@ export const AuditActions = {
   USER_LOGIN: 'USER_LOGIN',
   USER_LOGOUT: 'USER_LOGOUT',
   TOKEN_REFRESHED: 'TOKEN_REFRESHED',
+
+  // AI Itinerary
+  AI_ITINERARY_APPLIED: 'AI_ITINERARY_APPLIED',
 } as const;
 
 export type AuditAction = typeof AuditActions[keyof typeof AuditActions];
@@ -58,21 +62,11 @@ export interface AuditLogInput {
 
 // ─── Audit Logger ─────────────────────────────────────────────────────────────
 
-/**
- * logAudit — INSERT một bản ghi vào audit_logs (không bao giờ UPDATE/DELETE)
- * Fail-safe: lỗi audit không nên làm crash operation chính
- *
- * ⚠️ INVARIANT (bug P2028 — đã từng gây HTTP 500 ở submit expense):
- *   KHÔNG gọi logAudit bên trong prisma.$transaction(async (tx) => ...).
- *   Hàm này ghi bằng prisma client NGOÀI transaction; SQLite chỉ cho phép 1 writer nên
- *   statement sẽ bị treo tới khi interactive transaction hết hạn 5000ms ⇒
- *   PrismaClientKnownRequestError P2028 "Transaction already closed" ⇒ 500.
- *   Cách đúng: gọi sau khi transaction đã commit ("Phase 2" — xem expense.service.submitExpense,
- *   trip.service.submitTrip/approveTrip/rejectTrip/closeTrip).
- */
-export async function logAudit(input: AuditLogInput): Promise<void> {
+/** With tx: audit participates in the mutation and errors roll it back.
+ * Without tx: retain best-effort behavior for existing auth callers. */
+export async function logAudit(input: AuditLogInput, tx?: Prisma.TransactionClient): Promise<void> {
   try {
-    await prisma.auditLog.create({
+    await (tx ?? prisma).auditLog.create({
       data: {
         userId: input.userId,
         entityType: input.entityType,
@@ -85,6 +79,7 @@ export async function logAudit(input: AuditLogInput): Promise<void> {
       },
     });
   } catch (err) {
+    if (tx) throw err;
     // Log lỗi nhưng không rethrow — audit fail không được làm crash business operation
     console.error(
       JSON.stringify({

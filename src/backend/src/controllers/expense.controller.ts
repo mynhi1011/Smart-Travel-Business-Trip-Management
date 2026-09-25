@@ -24,7 +24,7 @@ export async function updateExpense(req: Request, res: Response, next: NextFunct
 }
 
 export async function addExpenseItem(req: Request, res: Response, next: NextFunction): Promise<void> {
-  try { const user = u(req); sendCreated(res, await svc.addExpenseItem(req.params['id'] ?? '', user.id, req.body as svc.ExpenseItemInput)); }
+  try { const user = u(req); sendCreated(res, await svc.addExpenseItem(req.params['id'] ?? '', user.id, req.body as svc.ExpenseItemInput, req.get('Idempotency-Key'))); }
   catch (err) { next(err); }
 }
 
@@ -63,6 +63,6 @@ export async function reapproveExpense(req: Request, res: Response, next: NextFu
   try {
     const user = u(req);
     const { action, comment } = req.body as { action: 'APPROVED' | 'REJECTED'; comment?: string };
-    sendSuccess(res, await svc.reapproveExpense(req.params['id'] ?? '', user.id, action, comment, req.ip ?? undefined));
+    sendSuccess(res, await svc.reapproveExpense(req.params['id'] ?? '', user.id, action, comment, req.ip ?? undefined, req.get('Idempotency-Key')));
   } catch (err) { next(err); }
 }

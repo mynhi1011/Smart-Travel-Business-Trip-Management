@@ -1,14 +1,14 @@
 # Taiga Backlog - Smart Travel & Business Trip Management
 
-**Dự án:** Smart Travel & Business Trip Management  
-**Nhóm:** Nhóm 11 - MIS3032_1  
+**Dự án:** Smart Travel & Business Trip Management
+**Nhóm:** Nhóm 11 - MIS3032_1
 **Mục đích:** Danh mục Backlog chuẩn hóa cấu trúc **Epic > User Story > Task** sẵn sàng import/nhập trực tiếp lên Taiga Web để quản lý Sprint, phân công thành viên và kiểm soát tiến độ.
 
 ---
 
 ## 1. Cấu hình & Quy ước trên Taiga (Taiga Configuration)
 
-- **Workflow Statuses (Cột trạng thái Kanban/Taskboard):**  
+- **Workflow Statuses (Cột trạng thái Kanban/Taskboard):**
   `New` ➔ `Ready` ➔ `In Progress` ➔ `Review` ➔ `QA` ➔ `Done`
 - **Definition of Ready (DoR):** Story có user value, AC dạng Given/When/Then, Design link, API contract, Points ≤ 3 pts.
 - **Definition of Done (DoD):** Tất cả AC pass, code có PR review + merge `main`, có automated tests pass, không có blocker/critical bug.
@@ -38,27 +38,27 @@
 | Epic | Story ID & Tiêu đề | Pts | Task ID | Tên Task (Deliverable kiểm chứng được) | Owner | Est (h) | Expected Output & Verify Check | Priority |
 |---|---|---|---|---|---|---|---|---|
 | **EP-01** | **US-01: Khởi tạo Trip Request cơ bản** *(REQ-TR-01, BR-TR-02, BR-TR-03)* | **3** | **TSK-101** | Đặc tả Business Logic & Rule Validation cho Trip Request (`BR-TR-02`, `BR-TR-03`) | Mỹ Nhi (Product/BA) | 3h | Tài liệu Story Spec US-01; bảng ma trận validation ngày & Per Diem | Must |
-| | | | **TSK-102** | Thiết kế Data model, migration & API `POST /api/trips` (tạo Draft Trip) | Ánh Tuyết (Engineering) | 5h | DB Schema bảng `trips`; API tạo trip draft; validate Per Diem server-side | Must |
+| | | | **TSK-102** | Thiết kế Data model, migration & API `POST /api/v1/trips` (tạo Draft Trip) | Ánh Tuyết (Engineering) | 5h | DB Schema bảng `trips`; API tạo trip draft; validate Per Diem server-side | Must |
 | | | | **TSK-103** | Xây dựng UI Form tạo Trip Request & validation ngày/địa điểm | Kim Dung (UX/UI) | 5h | Form React responsive, validate ngày đi/về, feedback lỗi trực quan | Must |
 | | | | **TSK-104** | Viết Unit test & Integration test cho luồng tạo Trip Request | Bảo Ngọc (QA) | 3h | Test suite tạo request (happy path, boundary, validation pass) | Must |
 | | **US-02: AI sinh gợi ý lịch trình công tác** *(REQ-TR-02, BR-TR-07)* | **3** | **TSK-201** | Xây dựng AI Prompt Schema & kết nối LLM sinh Itinerary | Tuyết Nhi (AI/Vault) | 6h | Prompt structured output JSON; LLM client kết nối ổn định | Must |
-| | | | **TSK-202** | Xây dựng Backend API tích hợp AI & Guardrail chặn AI vượt ngân sách (`BR-TR-07`) | Ánh Tuyết (Engineering) | 4h | API `/api/ai/itinerary`; server-side guardrail check budget ≤ max; retry logic | Must |
+| | | | **TSK-202** | Xây dựng Backend API tích hợp AI & Guardrail chặn AI vượt ngân sách (`BR-TR-07`) | Ánh Tuyết (Engineering) | 4h | API `/api/v1/ai/generate-itinerary`; server-side guardrail check budget ≤ max; retry logic | Must |
 | | | | **TSK-203** | Xây dựng UI hiển thị kết quả AI Itinerary có Loading/Skeleton state | Kim Dung (UX/UI) | 4h | Component render itinerary theo ngày; skeleton loading animation | Must |
-| | **US-03: Xem và tùy chỉnh Lịch trình công tác** *(REQ-TR-06, BR-TR-01)* | **2** | **TSK-301** | Xây dựng API CRUD các mốc Itinerary (`/api/trips/:id/itinerary`) & check trần khách sạn (`BR-TR-01`) | Ánh Tuyết (Engineering) | 5h | Endpoints thêm/sửa/xóa mốc; server check trần phòng theo role | Must |
+| | **US-03: Xem và tùy chỉnh Lịch trình công tác** *(REQ-TR-06, BR-TR-01)* | **2** | **TSK-301** | Xây dựng API CRUD các mốc Itinerary (`/api/v1/trips/:id/itinerary`) & check trần khách sạn (`BR-TR-01`) | Ánh Tuyết (Engineering) | 5h | Endpoints thêm/sửa/xóa mốc; server check trần phòng theo role | Must |
 | | | | **TSK-302** | Thiết kế UI Itinerary Builder (thêm/sửa/xóa mốc di chuyển, khách sạn) | Kim Dung (UX/UI) | 5h | Giao diện kéo thả/chỉnh sửa mốc thời gian, tự động tính lại tổng tiền | Must |
 | | | | **TSK-303** | Đặc tả Story Spec & Test cases nghiệp vụ cho Itinerary Customization | Mỹ Nhi (Product/BA) | 2h | Spec chi tiết US-03; checklist kiểm tra ràng buộc ngân sách | Must |
 | **EP-02** | **US-04: Tự động kiểm tra vi phạm chính sách** *(REQ-TR-03, BR-TR-01..04)* | **3** | **TSK-401** | Đặc tả thuật toán & Ma trận Policy Check Engine (`BR-TR-01`, `02`, `03`, `04`) | Mỹ Nhi (Product/BA) | 3h | Tài liệu đặc tả logic Policy Engine; định nghĩa bộ cờ `VIOLATIONS` | Must |
 | | | | **TSK-402** | Lập trình Backend Policy Check Engine & API kiểm tra vi phạm | Ánh Tuyết (Engineering) | 5h | Service PolicyChecker trả về status `PASS` hoặc mảng `violations[]` | Must |
 | | | | **TSK-403** | Thiết kế UI Component hiển thị nhãn cảnh báo Policy Violation | Kim Dung (UX/UI) | 3h | Badge/Alert đỏ-vàng trực quan kèm modal nhập lý do giải trình | Must |
 | | | | **TSK-404** | Viết Test cases tự động kiểm thử bộ rules vi phạm chính sách | Bảo Ngọc (QA) | 3h | Suite test 8 test cases bao phủ toàn bộ tổ hợp vi phạm policy | Must |
-| | **US-05: Quản lý trực tiếp duyệt Cấp 1** *(REQ-TR-04, BR-TR-04)* | **2** | **TSK-501** | Xây dựng API `POST /api/trips/:id/approve` & `/reject` kèm logic định tuyến Cấp 2 (`BR-TR-04`) | Ánh Tuyết (Engineering) | 5h | Endpoint duyệt/từ chối; RBAC check role Manager; auto route L2 nếu >20M | Must |
+| | **US-05: Quản lý trực tiếp duyệt Cấp 1** *(REQ-TR-04, BR-TR-04)* | **2** | **TSK-501** | Xây dựng API `POST /api/v1/trips/:id/approve` & `/api/v1/trips/:id/reject` kèm logic định tuyến Cấp 2 (`BR-TR-04`) | Ánh Tuyết (Engineering) | 5h | Endpoint duyệt/từ chối; RBAC check role Manager; auto route L2 nếu >20M | Must |
 | | | | **TSK-502** | Xây dựng UI Màn hình duyệt Cấp 1 kèm tóm tắt dự toán & policy | Kim Dung (UX/UI) | 5h | Screen duyệt 1-click có tóm tắt lý do, chi phí, cờ vi phạm | Must |
 | | | | **TSK-503** | Soạn thảo kịch bản duyệt & Definition of Acceptance cho Approval Workflow | Mỹ Nhi (Product/BA) | 2h | Tài liệu bàn giao nghiệp vụ luồng duyệt; checklist nghiệm thu | Must |
 | | **US-06: Travel Admin duyệt Cấp 2 & phát hành** *(REQ-TR-05, BR-TR-04)* | **2** | **TSK-601** | Xây dựng API duyệt Cấp 2 cho Travel Admin & cập nhật status chuyến đi | Ánh Tuyết (Engineering) | 4h | Endpoint duyệt Cấp 2; update status `APPROVED`; emit log event | Must |
 | | | | **TSK-602** | Xây dựng UI Màn hình thẩm định & duyệt Cấp 2 của Travel Admin | Kim Dung (UX/UI) | 4h | Screen thẩm định lịch trình, chi phí & phê duyệt cấp 2 | Must |
 | | | | **TSK-603** | Viết Integration test luồng duyệt 2 cấp end-to-end | Bảo Ngọc (QA) | 4h | Test suite mô phỏng Employee ➔ Manager ➔ Admin duyệt | Must |
 | **EP-03** | **US-07: Lập và nộp Báo cáo chi phí (Expense Claim)** *(REQ-TR-07, REQ-TR-08, BR-TR-05, BR-TR-06)* | **3** | **TSK-701** | Đặc tả quy tắc tính Variance chênh lệch & ràng buộc giải trình (`BR-TR-05`) | Mỹ Nhi (Product/BA) | 3h | Công thức tính % variance; điều kiện kích hoạt duyệt bổ sung | Must |
-| | | | **TSK-702** | Thiết kế DB schema & Lập trình Backend API Expense Management (`POST /api/trips/:id/expenses`) | Ánh Tuyết (Engineering) | 6h | Schema `expenses`, `expense_items`; API tính variance server-side | Must |
+| | | | **TSK-702** | Thiết kế DB schema & Lập trình Backend API Expense Management (`POST /api/v1/trips/:id/expense`) | Ánh Tuyết (Engineering) | 6h | Schema `expenses`, `expense_items`; API tính variance server-side | Must |
 | | | | **TSK-703** | Xây dựng UI Form kê khai chi phí & upload chứng từ mock | Kim Dung (UX/UI) | 5h | Form nhập từng khoản chi, đính kèm biên nhận, xem preview variance | Must |
 | | **US-08: Finance đối chiếu chi phí & Đóng hồ sơ** *(REQ-TR-09, BR-TR-05, BR-TR-06)* | **3** | **TSK-801** | Lập trình Backend API Finance Close Trip & Khóa dữ liệu bất biến (`BR-TR-06`, `BR-TR-05`) | Ánh Tuyết (Engineering) | 5h | Endpoint `/close`; chặn đóng nếu lệch >10% chưa duyệt; set read-only DB | Must |
 | | | | **TSK-802** | Xây dựng UI Màn hình đối chiếu chi phí cho Finance | Kim Dung (UX/UI) | 5h | Bảng đối chiếu `Dự toán` vs `Thực tế` vs `Lệch %`; nút Close | Must |

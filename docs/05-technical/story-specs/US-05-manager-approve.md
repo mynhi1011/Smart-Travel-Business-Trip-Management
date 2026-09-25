@@ -94,3 +94,8 @@ Trả thêm:
 | T5.8 | ApprovalReasons | GET trip → `approvalReasons` đầy đủ | snapshot đúng |
 | T5.9 | Banner | Manager thấy ApprovalReasonsBanner với lý do | UI hiển thị đúng |
 | T5.10 | TwoLevelBadge | Danh sách: trip L2 có badge | badge + tooltip |
+
+
+## FIX-08 transaction/concurrency contract
+
+Current SQLite implementation uses [runMutation writer reservation](../concurrency.md). Read/current-state validation/dependent writes/audit/notification persistence share one transaction. SSE follows commit. Expected stale transitions return 409 INVALID_STATUS_TRANSITION, CLOSED returns 409 TRIP_IMMUTABLE, exhausted lock retries return 409 CONCURRENT_MODIFICATION; authorization remains 403. A deleted resource is 404. Tests: `src/backend/src/__tests__/concurrency.test.ts` (independent real connections + HTTP + rollback faults). No claim of production load verification.

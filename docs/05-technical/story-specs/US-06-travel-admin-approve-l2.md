@@ -80,3 +80,8 @@ Khi `status = PENDING_ADMIN_APPROVAL`:
 | T6.6 | TwoLevelBadge | Danh sách cấp 2 có badge + tooltip | badge hiển thị |
 | T6.7 | Auth | MANAGER gọi approve PENDING_ADMIN_APPROVAL | 403 |
 | T6.8 | Audit | Sau T6.1 | `ADMIN_APPROVED` trong audit_logs |
+
+
+## FIX-08 transaction/concurrency contract
+
+Current SQLite implementation uses [runMutation writer reservation](../concurrency.md). Read/current-state validation/dependent writes/audit/notification persistence share one transaction. SSE follows commit. Expected stale transitions return 409 INVALID_STATUS_TRANSITION, CLOSED returns 409 TRIP_IMMUTABLE, exhausted lock retries return 409 CONCURRENT_MODIFICATION; authorization remains 403. A deleted resource is 404. Tests: `src/backend/src/__tests__/concurrency.test.ts` (independent real connections + HTTP + rollback faults). No claim of production load verification.

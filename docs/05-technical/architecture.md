@@ -1,3 +1,5 @@
+> Current implementation authority for database/concurrency: [FIX-08](concurrency.md). PostgreSQL-specific diagrams, DDL and operational notes below describe the original target, not a verified production deployment.
+
 # Architecture — Smart Travel & Business Trip Management
 
 **Dự án:** Smart Travel & Business Trip Management
@@ -48,7 +50,7 @@ Hệ thống áp dụng **Layered Monolith with Service Modules** — một ki�
 
 | Nguyên tắc | Áp dụng cụ thể |
 |---|---|
-| **Single Source of Truth** | PostgreSQL là nơi duy nhất lưu trạng thái; frontend không cache state nghiệp vụ |
+| **Single Source of Truth** | SQLite is the current state store; PostgreSQL is a target design |
 | **Business Logic tập trung ở Server** | Policy Check Engine, Approval Router, Expense Variance, AI Guardrail đều chạy server-side |
 | **RBAC tại API Gateway** | Mọi request qua middleware `authGuard` + `roleGuard` trước khi chạm service |
 | **Immutability cho CLOSED trip** | Middleware `immutableGuard` chặn mọi write mutation nếu `trip.status === CLOSED` |
@@ -69,7 +71,7 @@ Hệ thống áp dụng **Layered Monolith with Service Modules** — một ki�
 | **HTTP Client** | Axios | v1.x | Interceptor dễ tích hợp JWT attach & error handling tập trung | — |
 | **Backend** | Node.js + Express.js + TypeScript | Node 20 LTS | JavaScript full-stack giảm context switch cho team, TypeScript đảm bảo type safety | ADR-03 |
 | **ORM** | Prisma | v5.x | Type-safe query, migration rõ ràng, hỗ trợ tốt với PostgreSQL | ADR-03 |
-| **Database** | PostgreSQL | v16 | ACID transaction (NFR-TR-05), Row-Level Security, JSON support cho audit payload | ADR-04 |
+| **Database** | SQLite (current implementation) | Prisma 5 connector | Writer reservation + atomic mutations; PostgreSQL remains a target design | [FIX-08](concurrency.md) |
 | **Authentication** | JWT (Access + Refresh Token) | — | Stateless, dễ implement RBAC qua payload `role` | ADR-05 |
 | **AI Service** | Google Gemini API | gemini-1.5-flash | Free tier đủ dùng cho demo, context window lớn, JSON output mode | ADR-06 |
 | **PDF Export** | Puppeteer / html-pdf | Puppeteer 22 | Render HTML template thành PDF, hỗ trợ tiếng Việt, không cần font external | — |
@@ -405,7 +407,7 @@ Request
 
 - Quản lý vòng đời Trip Request theo state machine (xem §9).
 - Mọi state transition được bọc trong `prisma.$transaction(...)`.
-- Sau mỗi transition: gọi `AuditLogger.log(...)` và `NotificationService.emit(...)`.
+- Trong transaction: ghi audit và notification bằng cùng `tx`; sau commit mới phát SSE. Xem [FIX-08](concurrency.md).
 
 #### PolicyCheckEngine
 
@@ -516,10 +518,12 @@ Các bảng chính (xem `data-model.md` để biết chi tiết cột):
 | `audit_logs` | Immutable audit trail (INSERT-only) |
 
 **Chiến lược đảm bảo Integrity (NFR-TR-05):**
-- Mọi state transition dùng `prisma.$transaction([...])`.
-- Sử dụng `SELECT ... FOR UPDATE` khi đọc trip trước khi update để tránh race condition.
-- Foreign key constraints đầy đủ.
-- `CHECK constraint` trên cột `status` để chỉ chấp nhận các giá trị hợp lệ.
+- Implementation hiện tại dùng SQLite + Prisma 5; PostgreSQL 16 là thiết kế đích, chưa phải bằng chứng deployment production.
+- Trip/Expense/Itinerary dùng `runMutation`: lấy SQLite writer bằng UPDATE singleton `mutation_lock` trước mọi business read, rồi đọc/check/write cùng `tx`.
+- Audit và notification rows lưu cùng transaction. SSE sau commit; lỗi delivery không đổi kết quả mutation đã commit.
+- Retry conflict toàn transaction có giới hạn; hết lượt trả 409 `CONCURRENT_MODIFICATION`. Không dùng `SELECT FOR UPDATE`.
+- FK/UNIQUE theo schema/migrations hiện tại, không tuyên bố có status CHECK hoặc partial UNIQUE approval index chưa được migrate.
+- Boundary, idempotency, migration và test: [Canonical concurrency strategy](concurrency.md).
 
 ### 5.5 AI Service (External)
 
@@ -893,6 +897,8 @@ stateDiagram-v2
 
 ---
 
+> FIX-08 implementation update: SQLite is the supported checked-in provider. The following PostgreSQL ADR remains historical/target design and does not describe current lock behavior. See [canonical strategy](concurrency.md).
+
 ### ADR-04: Database — PostgreSQL
 
 | | |
@@ -967,7 +973,7 @@ stateDiagram-v2
 | **SQL Injection** | Prisma ORM parameterized query — không raw SQL trong business code |
 | **XSS** | Access Token không lưu localStorage; httpOnly cookie cho Refresh Token |
 | **CSRF** | SameSite=Strict trên Refresh Token cookie |
-| **Race condition (double approve)** | `SELECT ... FOR UPDATE` trong transaction trước khi update trạng thái (NFR-TR-05) |
+| **Race condition (double approve)** | runMutation reserves SQLite writer before state validation; bounded retry; see concurrency.test.ts |
 | **Mass assignment** | Whitelist chặt chẽ các field được phép update trong từng endpoint |
 
 ### 11.3 Observability (Debug lỗi thực tế)
@@ -984,7 +990,7 @@ stateDiagram-v2
 
 | Tình huống | Rủi ro | Biện pháp |
 |---|---|---|
-| **Nhiều user submit trip cùng lúc** | Race condition trên cùng approval record | `SELECT ... FOR UPDATE` trong transaction — đã xử lý |
+| **Concurrent trip submissions** | Stale state | SQLite writer reservation before reads; verified by independent-connection tests |
 | **Nhiều SSE connection** | File descriptor limit, memory leak | Giới hạn timeout SSE connection (30s re-connect); cleanup on disconnect |
 | **AI call chậm > 5s** | NFR-TR-02 vi phạm, UX kém | Timeout 8s với fallback error message; frontend hiển thị skeleton; không block luồng khác |
 | **PDF export nặng** | Puppeteer spawn nhiều Chrome process | Queue PDF job (async), trả về polling URL thay vì block response |

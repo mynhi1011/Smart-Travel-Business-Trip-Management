@@ -65,9 +65,10 @@ export async function listTrips(): Promise<BackendTrip[]> {
   return response.data;
 }
 
-export async function createTrip(input: Record<string, unknown>): Promise<BackendTrip> {
+export async function createTrip(input: Record<string, unknown>, requestKey: string = crypto.randomUUID()): Promise<BackendTrip> {
   const response = await apiRequest<{ data: BackendTrip }>('/trips', {
     method: 'POST', body: JSON.stringify(input),
+    headers: { 'Idempotency-Key': requestKey },
   });
   return response.data;
 }

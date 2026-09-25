@@ -33,7 +33,7 @@ Finance xem xét Expense Claim, đối chiếu chi phí thực tế vs dự toá
 6. Finance bấm **"Phê duyệt quyết toán"** → `POST /api/v1/trips/:tripId/expense/approve`.
 7. Server: `expense.status = APPROVED`, `approved_at = now()`, `trip.status = EXPENSE_APPROVED`, audit log, emit.
 8. Nút **"Đóng hồ sơ"** được enable (lúc này `expense.status = APPROVED`). Finance bấm → `POST /api/v1/trips/:tripId/close`.
-9. Server (1 transaction): `trip.status = CLOSED` + `trip.closedAt = now()` + `expense.status = CLOSED`, audit log (`TRIP_CLOSED`), emit notification → Employee.
+9. Server (1 transaction): `trip.status = CLOSED` + `trip.closedAt = now()` + `expense.status = CLOSED`, audit log (`TRIP_CLOSED`), lưu notification. Emit SSE → Employee chỉ sau commit.
 10. Client hiển thị "Hồ sơ đã được đóng — Read-only." (BR-TR-06). Response trả về cả `trip.status` và `expense.status`.
 
 ---
@@ -67,7 +67,7 @@ Finance xem xét Expense Claim, đối chiếu chi phí thực tế vs dự toá
 | E-03 | Reject không có comment | `400 VALIDATION_ERROR` |
 | E-04 | Bất kỳ write nào sau CLOSED | `409 TRIP_IMMUTABLE` (BR-TR-06) |
 | E-05 | EMPLOYEE cố gọi `/expense/approve` | `403 FORBIDDEN` (NFR-TR-03) |
-| E-06 | Double close đồng thời | `SELECT FOR UPDATE` + state check → `409 INVALID_STATE` (trip đã CLOSED) |
+| E-06 | Double close đồng thời | SQLite writer reservation + state check/conditional update trong `runMutation` → một thành công, một `409 TRIP_IMMUTABLE` |
 | E-07 | Token hết hạn | Auto refresh → retry |
 
 ---
@@ -147,7 +147,7 @@ Finance xem xét Expense Claim, đối chiếu chi phí thực tế vs dự toá
 | Close chỉ khi `expense.status = APPROVED` | State machine | Service | 409 |
 | Reject bắt buộc comment | data-model | Server | 400 |
 | CLOSED trip → tất cả write bị block | BR-TR-06 | immutableGuard | 409 TRIP_IMMUTABLE |
-| SELECT FOR UPDATE cho Close | NFR-TR-05 | DB transaction | Race condition |
+| SQLite writer reservation + conditional update cho Close | NFR-TR-05 | Cùng transaction cho trip/expense/audit/notification | Xem [FIX-08](../concurrency.md) |
 
 ---
 
@@ -197,3 +197,8 @@ Finance xem xét Expense Claim, đối chiếu chi phí thực tế vs dự toá
 - [ ] `audit_logs` đầy đủ 3 actions (NFR-TR-04)
 - [ ] 14 test cases T8.1–T8.14 pass
 - [ ] Response ≤ 1s (NFR-TR-01)
+
+
+## FIX-08 transaction/concurrency contract
+
+Current SQLite implementation uses [runMutation writer reservation](../concurrency.md). Read/current-state validation/dependent writes/audit/notification persistence share one transaction. SSE follows commit. Expected stale transitions return 409 INVALID_STATUS_TRANSITION, CLOSED returns 409 TRIP_IMMUTABLE, exhausted lock retries return 409 CONCURRENT_MODIFICATION; authorization remains 403. A deleted resource is 404. Tests: `src/backend/src/__tests__/concurrency.test.ts` (independent real connections + HTTP + rollback faults). No claim of production load verification.

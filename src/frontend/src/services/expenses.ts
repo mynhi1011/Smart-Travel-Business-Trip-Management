@@ -83,10 +83,12 @@ export async function updateExpenseJustification(
 export async function addExpenseItem(
   tripId: string,
   input: ExpenseItemInput,
+  requestKey: string = crypto.randomUUID(),
 ): Promise<BackendExpenseItem> {
   const res = await apiRequest<{ data: BackendExpenseItem }>(`/trips/${tripId}/expense/items`, {
     method: 'POST',
     body: JSON.stringify(input),
+    headers: { 'Idempotency-Key': requestKey },
   });
   return res.data;
 }
@@ -142,10 +144,12 @@ export async function rejectExpense(
 export async function reapproveExpense(
   tripId: string,
   comment: string,
+  requestKey: string = crypto.randomUUID(),
 ): Promise<BackendExpense> {
   const res = await apiRequest<{ data: BackendExpense }>(`/trips/${tripId}/expense/reapprove`, {
     method: 'POST',
     body: JSON.stringify({ action: 'APPROVED', comment }),
+    headers: { 'Idempotency-Key': requestKey },
   });
   return res.data;
 }

@@ -220,3 +220,10 @@ Cho phép Employee tạo Expense Claim sau chuyến đi, thêm từng khoản ch
 > **⚠️ Cần xác nhận trước khi code:**
 > 1. Nếu Finance reject và Employee submit lại, `estimatedBudgetSnapshot` có thay đổi không? (Hiện tại: không — snapshot bất biến)
 > 2. Receipt upload là mock URL hay có file upload thật trong MVP này?
+
+
+## FIX-08 transaction/concurrency contract
+
+Current SQLite implementation uses [runMutation writer reservation](../concurrency.md). Read/current-state validation/dependent writes/audit/notification persistence share one transaction. SSE follows commit. Expected stale transitions return 409 INVALID_STATUS_TRANSITION, CLOSED returns 409 TRIP_IMMUTABLE, exhausted lock retries return 409 CONCURRENT_MODIFICATION; authorization remains 403. A deleted resource is 404. Tests: `src/backend/src/__tests__/concurrency.test.ts` (independent real connections + HTTP + rollback faults). No claim of production load verification.
+
+Expense item CRUD and total recomputation are atomic with state checks; submit reads the same protected snapshot. Manager reapproval updates trip and expense with its audit atomically. Existing variance/justification rules are unchanged by FIX-08.

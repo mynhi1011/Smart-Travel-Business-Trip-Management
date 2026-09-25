@@ -25,6 +25,27 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// FIX-08: SQLite writer reservation, explicit request receipts and code allocation.
+model MutationLock {
+  id Int @id
+  @@map("mutation_lock")
+}
+
+model MutationReceipt {
+  scope String
+  requestKey String @map("request_key")
+  fingerprint String
+  result String
+  @@id([scope, requestKey])
+  @@map("mutation_receipts")
+}
+
+model TripCodeSequence {
+  year Int @id
+  value Int
+  @@map("trip_code_sequences")
+}
+
 // =============================================================================
 // MODELS — 10 bảng theo data-model.md §3
 // Enum values được validate ở Service layer (TypeScript types vẫn enforce)

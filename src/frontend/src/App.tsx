@@ -16,7 +16,7 @@ import {
   type TravelAdminDashboard, type FinanceDashboard, type AdminDashboard,
 } from "./services/dashboard";
 import {
-  getItinerary, addItineraryItem, updateItineraryItem, deleteItineraryItem,
+  getItinerary, addItineraryItem, addBatchItineraryItems, updateItineraryItem, deleteItineraryItem,
   type BackendItineraryItem, type ItineraryItemInput, type ItineraryCategory, type ItineraryTimeSlot,
 } from "./services/itinerary";
 import {
@@ -640,6 +640,12 @@ function TripCard({ trip, onClick, cta }: { trip: Trip; onClick?: () => void; ct
     </Card>
   );
 }
+
+// Canonical allowed statuses for PDF export — mirrors PDF_ALLOWED_STATUSES in pdf.controller.ts.
+// Uses frontend TripStatus values (ONGOING → TRIP_IN_PROGRESS per toFrontendTrip mapping).
+const PDF_EXPORT_ALLOWED_STATUSES: TripStatus[] = [
+  "APPROVED", "TRIP_IN_PROGRESS", "EXPENSE_SUBMITTED", "EXPENSE_APPROVED", "CLOSED",
+];
 
 function ExportBtn({ label = "Xuất PDF" }: { label?: string }) {
   const [exporting, setExporting] = useState(false);
@@ -1387,6 +1393,10 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
   // BUG-06: state lưu tripId sau khi tạo DRAFT và itinerary thật từ AI
   const [draftTripId, setDraftTripId] = useState<string | null>(null);
   const [aiItinerary, setAiItinerary] = useState<ItineraryDay[]>([]);
+  const [aiItems, setAiItems] = useState<AiItineraryItem[]>([]);
+  const [applyingAi, setApplyingAi] = useState(false);
+  const [aiApplied, setAiApplied] = useState(false);
+  const aiApplyKey = useRef<string | null>(null);
   const [aiError, setAiError] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -1680,6 +1690,9 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
                         budget,
                       });
                       setAiItinerary(aiItemsToItineraryDays(result.items));
+                      setAiItems(result.items);
+                      aiApplyKey.current = crypto.randomUUID();
+                      setAiApplied(false);
                       setAiGenerated(true);
                     } catch (err) {
                       const msg = err instanceof Error ? err.message : "Không thể sinh lịch trình.";
@@ -1705,12 +1718,37 @@ function EmpCreate({ user, onLogout, onSuccess, onSaveDraft, onCancel }: {
                       <p className="text-sm text-gray-500 mt-0.5">{form.from} — {form.to}</p>
                     </div>
                     <div className="flex gap-2">
-                      <ExportBtn label="Xuất PDF" />
-                      <button onClick={() => { setAiGenerated(false); setAiError(""); }} className="text-xs text-emerald-600 hover:underline">Sinh lại</button>
+                      {/* Trip ở DRAFT khi tạo lịch trình AI — chưa đủ điều kiện export PDF */}
+                      <button disabled={applyingAi} onClick={() => { setAiGenerated(false); setAiError(""); }} className="text-xs text-emerald-600 hover:underline">Sinh lại</button>
                     </div>
                   </div>
                   {/* BUG-06: dùng aiItinerary từ API thật thay vì AI_ITINERARY static */}
-                  <ItineraryList initial={aiItinerary} departDate={form.departDate} />
+                  <ItineraryList initial={aiItinerary} departDate={form.departDate} readOnly />
+                  <button
+                    disabled={applyingAi || aiApplied || !draftTripId || aiItems.length === 0}
+                    onClick={async () => {
+                      if (!draftTripId || applyingAi || aiApplied) return;
+                      setApplyingAi(true);
+                      setAiError("");
+                      try {
+                        await addBatchItineraryItems(draftTripId, aiItems.map((item, sortOrder) => ({
+                          ...item,
+                          notes: item.notes ?? undefined,
+                          sortOrder,
+                          isAiGenerated: true,
+                        })), aiApplyKey.current ?? (aiApplyKey.current = crypto.randomUUID()));
+                        setAiApplied(true);
+                      } catch (err) {
+                        setAiError(err instanceof Error ? err.message : "Không thể áp dụng lịch trình AI.");
+                      } finally {
+                        setApplyingAi(false);
+                      }
+                    }}
+                    className="mt-4 px-5 py-2.5 bg-[#1b2f35] text-white text-sm font-semibold rounded-lg disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {applyingAi ? "Đang áp dụng..." : aiApplied ? "Đã áp dụng lịch trình AI" : "Áp dụng lịch trình AI"}
+                  </button>
+                  {aiError && <p role="alert" className="mt-2 text-xs text-red-600">{aiError}</p>}
                 </div>
               )}
             </div>
@@ -1840,7 +1878,7 @@ function EmpItinerary({ user, onLogout, trip, onBack }: { user: User; onLogout: 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Nav user={user} onLogout={onLogout} />
-      <PageHeader label={trip.tripCode} title={`${trip.from} — ${trip.to}`} subtitle={`${trip.departDate} – ${trip.returnDate} · Lịch trình`} action={<ExportBtn />} />
+      <PageHeader label={trip.tripCode} title={`${trip.from} — ${trip.to}`} subtitle={`${trip.departDate} – ${trip.returnDate} · Lịch trình`} action={PDF_EXPORT_ALLOWED_STATUSES.includes(trip.status) ? <ExportBtn /> : undefined} />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7">
         <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Về Dashboard</button></div>
         <Card className="p-6 sm:p-8 max-w-2xl">
@@ -2012,7 +2050,7 @@ function EmpExpense({ user, onLogout, trip, onBack, onSave }: {
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Nav user={user} onLogout={onLogout} />
-      <PageHeader label={trip.tripCode} title="Khai báo chi phí thực tế" subtitle={`${trip.from} — ${trip.to} · ${trip.departDate} – ${trip.returnDate}`} action={<ExportBtn />} />
+      <PageHeader label={trip.tripCode} title="Khai báo chi phí thực tế" subtitle={`${trip.from} — ${trip.to} · ${trip.departDate} – ${trip.returnDate}`} action={PDF_EXPORT_ALLOWED_STATUSES.includes(trip.status) ? <ExportBtn /> : undefined} />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7">
         <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Về Dashboard</button></div>
         {readOnly && (
@@ -2183,7 +2221,7 @@ function ApprovalDetail({ user, onLogout, trip, level, onApprove, onReject, onBa
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Nav user={user} onLogout={onLogout} />
-      <PageHeader label={trip.tripCode} title={`${trip.from} — ${trip.to}`} subtitle={`${trip.departDate} – ${trip.returnDate} · ${trip.employeeName} · Duyệt cấp ${level}`} action={<ExportBtn />} />
+      <PageHeader label={trip.tripCode} title={`${trip.from} — ${trip.to}`} subtitle={`${trip.departDate} – ${trip.returnDate} · ${trip.employeeName} · Duyệt cấp ${level}`} action={user.role === 'finance' && PDF_EXPORT_ALLOWED_STATUSES.includes(trip.status) ? <ExportBtn /> : undefined} />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7">
         <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Quay lại</button></div>
         {trip.policyViolations && trip.policyViolations.length > 0 && <div className="mb-4"><PolicyBanner violations={trip.policyViolations} /></div>}
@@ -2454,7 +2492,7 @@ function FinExpense({ user, onLogout, trip, onClose, onBack }: {
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Nav user={user} onLogout={onLogout} />
-      <PageHeader label={trip.tripCode} title="Chi phí thực tế" subtitle={`${trip.from} — ${trip.to} · ${trip.employeeName}`} action={<ExportBtn />} />
+      <PageHeader label={trip.tripCode} title="Chi phí thực tế" subtitle={`${trip.from} — ${trip.to} · ${trip.employeeName}`} action={PDF_EXPORT_ALLOWED_STATUSES.includes(trip.status) ? <ExportBtn /> : undefined} />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7">
         <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Quay lại</button></div>
         {requiresManagerReapproval && alreadyApproved && (

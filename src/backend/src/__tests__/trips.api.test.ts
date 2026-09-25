@@ -158,7 +158,8 @@ describe('POST /api/v1/trips', () => {
     expect(tripService.createTrip).toHaveBeenCalledWith(
       'user-employee-001',
       expect.objectContaining({ destination: 'TP. Hồ Chí Minh' }),
-      expect.anything() // req.ip
+      expect.anything(), // req.ip
+      undefined, // Optional Idempotency-Key.
     );
   });
 

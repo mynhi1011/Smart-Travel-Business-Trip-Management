@@ -5,7 +5,7 @@
  * Dùng pdfkit (pure JS, không cần Puppeteer/Chrome).
  *
  * REQ-TR-12: Export báo cáo chuyến đi dạng PDF phục vụ kế toán.
- * Access: Trip owner | FINANCE | ADMIN
+ * Access: Trip owner | FINANCE
  */
 
 import { Request, Response, NextFunction } from 'express';
@@ -157,8 +157,8 @@ export async function exportTripPdf(req: Request, res: Response, next: NextFunct
 
     if (!trip) { next(Errors.TRIP_NOT_FOUND()); return; }
 
-    // Access check: owner | FINANCE | ADMIN
-    if (trip.employeeId !== userId && role !== 'FINANCE' && role !== 'ADMIN') {
+    // Access check: owner | FINANCE
+    if (trip.employeeId !== userId && role !== 'FINANCE') {
       next(Errors.FORBIDDEN()); return;
     }
 

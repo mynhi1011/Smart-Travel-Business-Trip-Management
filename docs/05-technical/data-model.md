@@ -1489,69 +1489,30 @@ model AuditLog {
 
 | Tình huống | Cơ chế bảo vệ | Tầng |
 |---|---|---|
-| **Double-approve: 2 Manager bấm Approve cùng lúc** | `UNIQUE INDEX uix_approval_one_per_level_approved ON approval_records(trip_id, approval_level) WHERE action='APPROVED'` — người thứ 2 sẽ nhận unique violation | DB constraint |
-| **State transition đồng thời** | Service dùng `SELECT ... FOR UPDATE` trên `trips` trước mỗi transition — chỉ 1 transaction thực hiện được | Service + DB lock |
-| **Cập nhật total_actual đồng thời** | `SELECT ... FOR UPDATE` trên `expenses` trước khi tính và update `total_actual` | Service + DB lock |
+| **Double-approve** | `runMutation` lấy SQLite writer trước khi đọc trạng thái; request sau đọc trạng thái mới và nhận 409. Không có partial UNIQUE approval index trong migrations hiện tại. | Service + DB transaction |
+| **State transition đồng thời** | Đọc/check/write cùng transaction đã giữ quyền ghi SQLite; bounded retry conflict | Service + DB transaction |
+| **Cập nhật total_actual đồng thời** | Item mutation + SUM + update header trong cùng `runMutation` | Service + DB transaction |
 | **Refresh token rotation** | `UNIQUE(token_hash)` — đảm bảo token không bị duplicate | DB constraint |
-| **Concurrent expense item modification** | Service kiểm tra `expense.status = 'DRAFT'` trong transaction; nếu đã SUBMITTED thì block | Service layer |
+| **Concurrent expense item modification** | Kiểm tra trạng thái hiện tại DRAFT/REJECTED và CLOSED trong transaction trước mutation; nếu đã SUBMITTED thì block | Service + DB transaction |
 
 **Pattern chuẩn cho state transition (TypeScript/Prisma):**
+The SQLite implementation uses [FIX-08](concurrency.md). PostgreSQL DDL elsewhere in this document is a target design, not an assertion that those constraints exist in SQLite migrations.
+
 ```typescript
-// Trong TripService — pattern SELECT FOR UPDATE
-async submitTrip(tripId: string, userId: string): Promise<Trip> {
-  return await prisma.$transaction(async (tx) => {
-    // 1. Lock row trước — chặn concurrent write
-    const trip = await tx.$queryRaw<Trip[]>`
-      SELECT * FROM trips
-      WHERE id = ${tripId}::uuid
-      FOR UPDATE
-    `;
-
-    if (!trip[0]) throw new NotFoundError('Trip not found');
-    if (trip[0].status !== 'DRAFT') {
-      throw new InvalidStateError(`Cannot submit trip in status: ${trip[0].status}`);
-    }
-    if (trip[0].employee_id !== userId) {
-      throw new ForbiddenError('Not the trip owner');
-    }
-
-    // 2. Chạy policy check
-    const policyResult = await policyCheckEngine.run(trip[0]);
-
-    // 3. Upsert policy_check_results
-    await tx.policyCheckResult.upsert({
-      where: { tripId },
-      create: { tripId, ...policyResult },
-      update: { ...policyResult, checkedAt: new Date() }
-    });
-
-    // 4. Update trip status
-    const updated = await tx.trip.update({
-      where: { id: tripId },
-      data: {
-        status: 'SUBMITTED',
-        requiresLevel2: policyResult.requiresLevel2Approval,
-        submittedAt: new Date()
-      }
-    });
-
-    // 5. Audit log
-    await tx.auditLog.create({
-      data: {
-        userId,
-        entityType: 'TRIP',
-        entityId: tripId,
-        action: 'TRIP_SUBMITTED',
-        previousState: 'DRAFT',
-        newState: 'SUBMITTED',
-        metadata: { policyViolationCount: policyResult.violationCount }
-      }
-    });
-
-    return updated;
-  });
-}
+// runMutation acquires the SQLite writer on tx before invoking this callback.
+return runMutation(async (tx, afterCommit) => {
+  const trip = await tx.trip.findUnique({ where: { id: tripId } });
+  // Validate current owner, state and CLOSED protection here.
+  // All dependent records and monetary totals use this same tx.
+  const updated = await tx.trip.update({ where: { id: tripId }, data: nextState });
+  await logAudit(auditInput, tx);
+  await createNotification(notificationInput, tx, afterCommit);
+  return updated;
+});
 ```
+
+Additional SQLite tables: `mutation_lock(id)` seeded with id=1; `mutation_receipts(scope, request_key, fingerprint, result)` with composite PK; `trip_code_sequences(year, value)` with year PK. See migration `20260925110000_canonical_mutations`.
+
 
 ### 7.3 Business Logic Protection Matrix
 
@@ -1562,7 +1523,7 @@ Bảng kiểm tra mỗi Business Rule được bảo vệ ở đâu:
 | **BR-TR-01** | Hotel limit theo job_grade | ❌ (phụ thuộc cross-table join) | ✅ PolicyCheckEngine so sánh `hotel_cost_per_night` với `HOTEL_LIMIT[user.job_grade]` | Service |
 | **BR-TR-02** | Per Diem cap | ❌ (cần trip_days + destination_type) | ✅ PolicyCheckEngine tính `max = trip_days * RATE[destination_type]` | Service |
 | **BR-TR-03** | Advance notice 3 ngày | ✅ `CHECK (NOT is_urgent OR urgency_reason IS NOT NULL)` | ✅ Service tính working days diff, set `is_urgent` | Cả hai |
-| **BR-TR-04** | 2-level approval routing | ✅ `UNIQUE INDEX` chặn double-approve | ✅ ApprovalRouter quyết định LEVEL_1 vs LEVEL_2 | Cả hai |
+| **BR-TR-04** | 2-level approval routing | No partial UNIQUE approval index in SQLite | Writer reservation + current state check + routing | Service + DB transaction |
 | **BR-TR-05** | Variance tolerance 10% | ✅ `chk_expenses_reapproval_consistent` | ✅ ExpenseService tính variance, block Finance close nếu >10% chưa reapprove | Cả hai |
 | **BR-TR-06** | Closed trip immutability | ✅ Trigger `trg_audit_logs_immutable` (audit); immutableGuard qua middleware | ✅ `immutableGuard` middleware chặn tất cả write khi status=CLOSED | Cả hai |
 | **BR-TR-07** | AI budget guardrail | ❌ (AI output — không thể enforce ở DB) | ✅ AIService validate `totalEstimatedCost ≤ budget` trước khi trả về | Service |
@@ -1581,7 +1542,7 @@ Bảng kiểm tra mỗi Business Rule được bảo vệ ở đâu:
 | Tiêu chí | Trạng thái | Ghi chú |
 |---|---|---|
 | Chuẩn hóa (3NF) | ✅ Đạt | Có 2 intentional denorm có ghi nhận |
-| Race condition handling | ✅ Đầy đủ | SELECT FOR UPDATE + UNIQUE constraint phủ toàn bộ critical path |
+| Race condition handling | FIX-08 verified on SQLite | Writer reservation, atomic read/check/write, bounded retries; real connection tests in concurrency.test.ts |
 | Snapshot data | ✅ Đầy đủ | 4 snapshot fields được ghi lại rõ lý do |
 | Business logic tại DB | ✅ Tốt | 7 BR được kiểm tra — 5/7 có ít nhất 1 lớp DB constraint; 2/7 chỉ ở service layer (lý do: phụ thuộc cross-table logic) |
 | Immutability | ✅ Đa lớp | Middleware (service) + Trigger (DB) cho audit_logs; Middleware cho trips CLOSED |

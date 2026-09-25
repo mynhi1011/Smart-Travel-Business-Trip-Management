@@ -383,7 +383,7 @@ Mỗi endpoint phải truy ngược về ít nhất 1 REQ và 1 US:
 | **NFR-TR-02** | AI latency ≤ 5.0s, Skeleton loading | US-02 | Gemini timeout 8s server-side; React Skeleton | ADR-06 | T2.4, T2.12 |
 | **NFR-TR-03** | RBAC strict, HTTP 403 | ALL | `authGuard` + `roleGuard` middleware | ADR-05 | T1.9, T4.8, T5.9, T8.8 |
 | **NFR-TR-04** | Audit logging: user_id, timestamp, action, prev/new state | ALL | `AuditLogger` service, bảng `audit_logs` (INSERT-only) | — | T1.11, T4.10, T5.10, T7.14 |
-| **NFR-TR-05** | Atomic transaction, chống race condition | US-05, US-06, US-08 | `prisma.$transaction`, `SELECT FOR UPDATE`, UNIQUE INDEX | ADR-04 | T5.8, T6.10, T8.11 |
+| **NFR-TR-05** | Atomic transaction, chống race condition | US-05, US-06, US-07, US-08; itinerary | SQLite writer reservation + `runMutation`, read/check/write/audit/notification cùng tx, bounded retry | [FIX-08](05-technical/concurrency.md) thay cơ chế lock ADR-04 cho SQLite | `src/backend/src/__tests__/concurrency.test.ts` (2 real connections, HTTP/rollback/conflict/idempotency); `itinerary.apply.test.ts` |
 | **NFR-TR-06** | Desktop web ≥ 1280×720, accessibility | ALL | Ant Design v5, responsive grid | ADR-02 | Manual usability test |
 
 ---

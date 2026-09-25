@@ -23,6 +23,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // vi.mock phải khai báo trước import service (hoisted tự động)
 vi.mock('../../src/backend/src/prisma/client', () => ({
   default: {
+    $executeRaw: vi.fn(),
+    $queryRaw: vi.fn(),
     trip: {
       create:     vi.fn(),
       findUnique: vi.fn(),
@@ -139,6 +141,12 @@ const VALID_INPUT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // FIX-08: the same mocked delegates now serve reads and writes inside tx.
+  // Real independent-connection coverage lives in concurrency.test.ts.
+  vi.mocked(prisma.$executeRaw).mockResolvedValue(1);
+  vi.mocked(prisma.$queryRaw).mockResolvedValue([{ value: 1 }]);
+  vi.mocked(prisma.$transaction).mockImplementation((async (fn: (tx: unknown) => unknown) => fn(prisma)) as never);
+
 });
 
 // ══════════════════════════════════════════════════════════════════════════════

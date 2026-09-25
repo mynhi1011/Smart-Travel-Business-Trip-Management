@@ -67,6 +67,10 @@ export const Errors = {
     new AppError(404, 'TRIP_NOT_FOUND', 'Không tìm thấy chuyến đi.'),
 
   // 409
+  CONCURRENT_MODIFICATION: () =>
+    new AppError(409, 'CONCURRENT_MODIFICATION', 'Dữ liệu đang được cập nhật. Vui lòng thử lại.'),
+  IDEMPOTENCY_CONFLICT: () =>
+    new AppError(409, 'IDEMPOTENCY_CONFLICT', 'Idempotency-Key đã được dùng với nội dung khác.'),
   TRIP_IMMUTABLE: () =>
     new AppError(409, 'TRIP_IMMUTABLE', 'Chuyến đi đã đóng (CLOSED), không thể chỉnh sửa.'),
   INVALID_STATUS_TRANSITION: (from: string, to: string) =>

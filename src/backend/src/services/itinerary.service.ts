@@ -4,8 +4,11 @@
  */
 
 import prisma from '../prisma/client';
+import type { Prisma } from '@prisma/client';
+import { runMutation } from './mutation.service';
 import { Errors } from '../middlewares/error-handler';
 import { HOTEL_LIMIT } from './policy.service';
+import { logAudit, AuditActions } from './audit.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -18,6 +21,7 @@ export interface ItineraryItemInput {
   estimatedCost?: number;
   notes?:         string;
   sortOrder?:     number;
+  isAiGenerated?: boolean;
 }
 
 const TIME_SLOTS = ['MORNING', 'AFTERNOON', 'EVENING', 'ALL_DAY'] as const;
@@ -25,8 +29,8 @@ const CATEGORIES = ['MEETING', 'ACCOMMODATION', 'TRANSPORT', 'MEAL', 'OTHER'] as
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-async function assertOwner(tripId: string, userId: string) {
-  const trip = await prisma.trip.findUnique({
+async function assertOwner(tripId: string, userId: string, db: Prisma.TransactionClient) {
+  const trip = await db.trip.findUnique({
     where: { id: tripId },
     select: {
       employeeId: true,
@@ -38,6 +42,7 @@ async function assertOwner(tripId: string, userId: string) {
   });
   if (!trip) throw Errors.TRIP_NOT_FOUND();
   if (trip.employeeId !== userId) throw Errors.FORBIDDEN();
+  if (trip.status === 'CLOSED') throw Errors.TRIP_IMMUTABLE();
   return trip;
 }
 
@@ -104,8 +109,8 @@ export async function getItinerary(tripId: string, userId: string, userRole: str
 }
 
 // ─── addItineraryItem ─────────────────────────────────────────────────────────
-export async function addItineraryItem(tripId: string, userId: string, data: ItineraryItemInput) {
-  const trip = await assertOwner(tripId, userId);
+async function insertItineraryItem(tripId: string, userId: string, data: ItineraryItemInput, isAiGenerated: boolean, db: Prisma.TransactionClient) {
+  const trip = await assertOwner(tripId, userId, db);
   validateInput(data);
 
   // BUG-12: Kiểm tra hotel limit BR-TR-01 khi category=ACCOMMODATION
@@ -122,7 +127,7 @@ export async function addItineraryItem(tripId: string, userId: string, data: Iti
   const diffMs  = itemDate.getTime() - dep.getTime();
   const dayNumber = Math.round(diffMs / 86400000) + 1;
 
-  return prisma.itineraryItem.create({
+  return db.itineraryItem.create({
     data: {
       tripId,
       itemDate,
@@ -134,60 +139,90 @@ export async function addItineraryItem(tripId: string, userId: string, data: Iti
       estimatedCost: data.estimatedCost ?? 0,
       notes:         data.notes         ?? null,
       sortOrder:     data.sortOrder     ?? 0,
-      isAiGenerated: false,
+      isAiGenerated,
     },
   });
 }
 
-// ─── updateItineraryItem ──────────────────────────────────────────────────────
+export async function addItineraryItem(tripId: string, userId: string, data: ItineraryItemInput, isAiGenerated: boolean = false, requestKey?: string) {
+  return runMutation(tx => insertItineraryItem(tripId, userId, data, isAiGenerated, tx),
+    { scope: 'itinerary:add:' + userId + ':' + tripId, key: requestKey, payload: { data, isAiGenerated } });
+}
+
+export async function addBatchItineraryItems(tripId: string, userId: string, inputs: ItineraryItemInput[], requestKey?: string) {
+  if (!Array.isArray(inputs) || inputs.length === 0) {
+    throw Errors.VALIDATION_ERROR({ fieldErrors: { items: ['Expected a non-empty items array'] }, formErrors: [] });
+  }
+  return runMutation(async tx => {
+    const items = [];
+    for (const input of inputs) {
+      items.push(await insertItineraryItem(tripId, userId, input, input.isAiGenerated === true, tx));
+    }
+    const aiItems = items.filter(item => item.isAiGenerated);
+    if (aiItems.length > 0) {
+      await logAudit({
+        userId, entityType: 'ITINERARY', entityId: tripId,
+        action: AuditActions.AI_ITINERARY_APPLIED,
+        metadata: { itemCount: aiItems.length, totalEstimatedCost: computeTotalCost(aiItems) },
+      }, tx);
+    }
+    return items;
+  }, { scope: 'itinerary:batch:' + userId + ':' + tripId, key: requestKey, payload: inputs });
+}
+
+
 export async function updateItineraryItem(
   tripId: string, itemId: string, userId: string,
   data: Partial<ItineraryItemInput>
 ) {
-  const trip = await assertOwner(tripId, userId);
-  validateInput(data);
+  return runMutation(async tx => {
+    const trip = await assertOwner(tripId, userId, tx);
+    validateInput(data);
 
-  const item = await prisma.itineraryItem.findFirst({ where: { id: itemId, tripId } });
-  if (!item) throw Errors.NOT_FOUND('itinerary item');
+    const item = await tx.itineraryItem.findFirst({ where: { id: itemId, tripId } });
+    if (!item) throw Errors.NOT_FOUND('itinerary item');
 
-  // BUG-12: Kiểm tra hotel limit BR-TR-01 khi update category/cost ACCOMMODATION
-  const effectiveCategory = data.category ?? item.category;
-  const effectiveCost     = data.estimatedCost ?? item.estimatedCost;
-  checkAccommodationLimit(effectiveCategory, effectiveCost, trip.employee.jobGrade);
+    // BUG-12: Kiểm tra hotel limit BR-TR-01 khi update category/cost ACCOMMODATION
+    const effectiveCategory = data.category ?? item.category;
+    const effectiveCost     = data.estimatedCost ?? item.estimatedCost;
+    checkAccommodationLimit(effectiveCategory, effectiveCost, trip.employee.jobGrade);
 
-  // BUG-19 fix: re-compute dayNumber khi itemDate thay đổi
-  let newItemDate: Date | undefined;
-  let newDayNumber: number | undefined;
-  if (data.itemDate !== undefined) {
-    newItemDate = new Date(data.itemDate + 'T00:00:00.000Z');
-    const dep = new Date(trip.departureDate); dep.setUTCHours(0, 0, 0, 0);
-    const ret = new Date(trip.returnDate);    ret.setUTCHours(0, 0, 0, 0);
-    if (newItemDate < dep || newItemDate > ret) {
-      throw Errors.VALIDATION_ERROR({ fieldErrors: { itemDate: ['itemDate must be within trip date range'] }, formErrors: [] });
+    // BUG-19 fix: re-compute dayNumber khi itemDate thay đổi
+    let newItemDate: Date | undefined;
+    let newDayNumber: number | undefined;
+    if (data.itemDate !== undefined) {
+      newItemDate = new Date(data.itemDate + 'T00:00:00.000Z');
+      const dep = new Date(trip.departureDate); dep.setUTCHours(0, 0, 0, 0);
+      const ret = new Date(trip.returnDate);    ret.setUTCHours(0, 0, 0, 0);
+      if (newItemDate < dep || newItemDate > ret) {
+        throw Errors.VALIDATION_ERROR({ fieldErrors: { itemDate: ['itemDate must be within trip date range'] }, formErrors: [] });
+      }
+      const diffMs = newItemDate.getTime() - dep.getTime();
+      newDayNumber = Math.round(diffMs / 86400000) + 1;
     }
-    const diffMs = newItemDate.getTime() - dep.getTime();
-    newDayNumber = Math.round(diffMs / 86400000) + 1;
-  }
 
-  return prisma.itineraryItem.update({
-    where: { id: itemId },
-    data: {
-      ...(newItemDate    !== undefined && { itemDate:  newItemDate, dayNumber: newDayNumber }),
-      ...(data.timeSlot      !== undefined && { timeSlot:  data.timeSlot }),
-      ...(data.location      !== undefined && { location:  data.location.trim() }),
-      ...(data.activity      !== undefined && { activity:  data.activity.trim() }),
-      ...(data.category      !== undefined && { category:  data.category }),
-      ...(data.estimatedCost !== undefined && { estimatedCost: data.estimatedCost }),
-      ...(data.notes         !== undefined && { notes:     data.notes }),
-      ...(data.sortOrder     !== undefined && { sortOrder: data.sortOrder }),
-    },
+    return tx.itineraryItem.update({
+      where: { id: itemId },
+      data: {
+        ...(newItemDate    !== undefined && { itemDate:  newItemDate, dayNumber: newDayNumber }),
+        ...(data.timeSlot      !== undefined && { timeSlot:  data.timeSlot }),
+        ...(data.location      !== undefined && { location:  data.location.trim() }),
+        ...(data.activity      !== undefined && { activity:  data.activity.trim() }),
+        ...(data.category      !== undefined && { category:  data.category }),
+        ...(data.estimatedCost !== undefined && { estimatedCost: data.estimatedCost }),
+        ...(data.notes         !== undefined && { notes:     data.notes }),
+        ...(data.sortOrder     !== undefined && { sortOrder: data.sortOrder }),
+      },
+    });
   });
 }
 
 // ─── deleteItineraryItem ──────────────────────────────────────────────────────
 export async function deleteItineraryItem(tripId: string, itemId: string, userId: string) {
-  await assertOwner(tripId, userId);
-  const item = await prisma.itineraryItem.findFirst({ where: { id: itemId, tripId } });
-  if (!item) throw Errors.NOT_FOUND('itinerary item');
-  await prisma.itineraryItem.delete({ where: { id: itemId } });
+  return runMutation(async tx => {
+    await assertOwner(tripId, userId, tx);
+    const item = await tx.itineraryItem.findFirst({ where: { id: itemId, tripId } });
+    if (!item) throw Errors.NOT_FOUND('itinerary item');
+    await tx.itineraryItem.delete({ where: { id: itemId } });
+  });
 }

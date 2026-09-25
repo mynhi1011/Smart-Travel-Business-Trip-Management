@@ -375,7 +375,7 @@ Ngoài role, server còn kiểm tra ownership:
 **Request Body:** Không cần
 
 **Hành vi server:**
-1. Lock row (`SELECT FOR UPDATE`)
+1. Mở `runMutation`, lấy SQLite writer trước khi đọc/check trạng thái; không dùng `SELECT FOR UPDATE` (xem [FIX-08](concurrency.md)).
 2. Chạy PolicyCheckEngine (BR-TR-01, 02, 03, 04)
 3. Lưu `policy_check_results`, set `isUrgent`, `requiresLevel2`
 4. Update `status = 'SUBMITTED'`, `submittedAt = now()`
@@ -541,9 +541,13 @@ Ngoài role, server còn kiểm tra ownership:
 | `notes` | optional, string, max 2000 |
 | `sortOrder` | optional, integer, default 0 |
 
-> `isAiGenerated` — server luôn set `false` cho endpoint này. AI items đến qua `/ai/generate-itinerary`.
+> Với payload một item, server vẫn set `isAiGenerated = false`.
+> Apply AI dùng cùng endpoint với payload `{ "items": [...] }` (mảng không rỗng).
+> Mỗi item trong batch nhận `isAiGenerated?: boolean`, mặc định `false`; frontend gửi `true` cho item từ AI response.
+> Batch và audit `AI_ITINERARY_APPLIED` (nếu có AI items) được ghi atomic trong cùng transaction,
+> với `itemCount` và `totalEstimatedCost` tính từ các AI items vừa insert. Batch/audit lỗi được rollback, không có audit thành công giả.
 
-**Response 201:** ItineraryItem object
+**Response 201:** ItineraryItem object cho payload một item; ItineraryItem[] cho payload batch (trong `data`).
 
 **Errors:** `400`, `401`, `403`, `404`, `409 TRIP_IMMUTABLE`, `422` (date ngoài range)
 
@@ -1072,3 +1076,12 @@ Content-Disposition: attachment; filename="trip-report-<tripId>.pdf"
 ---
 
 *Mọi thay đổi API Contract phải cập nhật đồng thời `API.md` và `openapi.yaml`. Breaking changes cần ADR mới.*
+
+
+## FIX-08: concurrency and request identity
+
+Trip/Expense/Itinerary mutations follow [the SQLite canonical strategy](concurrency.md). New conflict: HTTP 409 `CONCURRENT_MODIFICATION` after bounded lock retries. Stale valid-actor decisions return 409 `INVALID_STATUS_TRANSITION`; CLOSED returns 409 `TRIP_IMMUTABLE`; an already deleted resource returns 404.
+
+Optional `Idempotency-Key` header is accepted by POST `/trips`, `/trips/:id/expense/items`, `/trips/:id/expense/reapprove`, and `/trips/:id/itinerary` (single/batch). Format: 1-128 characters `[A-Za-z0-9._:-]`. Reuse the key and payload after ambiguous network failure to replay committed response data; changing payload returns 409 `IDEMPOTENCY_CONFLICT`. Different keys identify independent intents, even with identical item content. No key means no automatic request deduplication. Auth/immutable route guards still run before replay.
+
+Audit and durable notification records share the business transaction. SSE delivery after commit is best effort; its failure does not turn a committed write into an HTTP failure.

@@ -14,7 +14,7 @@ export async function createTrip(req: Request, res: Response, next: NextFunction
     if (!req.user?.id) { next(Errors.UNAUTHORIZED()); return; }
     const parsed = createTripSchema.safeParse(req.body);
     if (!parsed.success) { next(Errors.VALIDATION_ERROR(parsed.error.flatten() as Record<string, unknown>)); return; }
-    const result = await tripService.createTrip(req.user.id, parsed.data, req.ip ?? undefined);
+    const result = await tripService.createTrip(req.user.id, parsed.data, req.ip ?? undefined, req.get('Idempotency-Key'));
     if (result.warnings.length > 0) {
       res.status(201).json({ data: result.trip, warnings: result.warnings });
     } else {

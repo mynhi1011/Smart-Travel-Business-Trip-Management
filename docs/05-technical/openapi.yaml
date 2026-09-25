@@ -8,6 +8,9 @@ info:
     - **Auth:** JWT Bearer (Access Token 15m) + Refresh Token (httpOnly cookie, 7d)
     - **Tiền tệ:** `integer` VND nguyên — ví dụ `1500000` = 1.500.000 VNĐ
     - **Tham chiếu:** `architecture.md`, `data-model.md`, `business-rules.md`
+    - **FIX-08:** SQLite mutations reserve the database writer before reads. See `concurrency.md`.
+      Business audit/notification rows commit atomically; SSE is emitted after commit.
+      Contention exhaustion returns 409 CONCURRENT_MODIFICATION; stale state returns 409 INVALID_STATUS_TRANSITION or TRIP_IMMUTABLE.
   version: "1.0.0"
   contact:
     name: Nhóm 11 — MIS3032_1
@@ -665,6 +668,17 @@ components:
 
   # ── Common Responses ────────────────────────────────────────
   responses:
+    MutationConflict:
+      description: Stale state, CLOSED trip, exhausted concurrency retry or changed payload for an existing Idempotency-Key.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            contention:
+              value: { error: CONCURRENT_MODIFICATION, message: 'Dữ liệu đang được cập nhật. Vui lòng thử lại.', details: {}, requestId: req_abc123 }
+            idempotency:
+              value: { error: IDEMPOTENCY_CONFLICT, message: 'Idempotency-Key đã được dùng với nội dung khác.', details: {}, requestId: req_abc123 }
     Unauthorized:
       description: Token thiếu hoặc không hợp lệ
       content:
@@ -741,6 +755,16 @@ components:
 
   # ── Common Parameters ───────────────────────────────────────
   parameters:
+    idempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Same actor/operation/resource/key and payload replay the committed result. Different payload returns 409. Use a new key for a new intent; no content-based item deduplication. Retain the key on retry.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]+$'
     tripId:
       name: tripId
       in: path
@@ -972,6 +996,8 @@ paths:
       tags: [Trips]
       summary: Tạo Trip Request mới
       operationId: createTrip
+      parameters:
+        - $ref: '#/components/parameters/idempotencyKey'
       security:
         - BearerAuth: []
       description: |
@@ -996,6 +1022,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/MutationConflict'
 
   /trips/{tripId}:
     parameters:
@@ -1053,7 +1081,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
 
     delete:
       tags: [Trips]
@@ -1072,9 +1100,8 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
 
-  # ── Trip Actions ─────────────────────────────────────────────
   /trips/{tripId}/submit:
     post:
       tags: [Trip Actions]
@@ -1116,7 +1143,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
 
   /trips/{tripId}/approve:
     post:
@@ -1170,7 +1197,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
 
   /trips/{tripId}/reject:
     post:
@@ -1219,7 +1246,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
 
   /trips/{tripId}/close:
     post:
@@ -1274,7 +1301,8 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
+
         '422':
           description: Variance > 10% chưa được Manager re-approve (BR-TR-05)
           content:
@@ -1326,25 +1354,50 @@ paths:
       tags: [Itinerary]
       summary: Thêm Itinerary Item
       operationId: createItineraryItem
+      parameters:
+        - $ref: '#/components/parameters/idempotencyKey'
       security:
         - BearerAuth: []
       description: |
         **Roles:** EMPLOYEE owner.
-        `isAiGenerated` luôn = false — AI items đến qua `/ai/generate-itinerary`.
+        Single-item payload keeps `isAiGenerated=false`. AI Apply sends `{ items: [...] }` with `isAiGenerated=true` per item.
+        Batch insert and AI_ITINERARY_APPLIED audit are atomic. Idempotency-Key retries replay the committed result.
         Bị chặn nếu trip CLOSED (immutableGuard → 409 TRIP_IMMUTABLE).
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ItineraryItemRequest'
+              oneOf:
+                - $ref: '#/components/schemas/ItineraryItemRequest'
+                - type: object
+                  required: [items]
+                  properties:
+                    items:
+                      type: array
+                      minItems: 1
+                      items:
+                        allOf:
+                          - $ref: '#/components/schemas/ItineraryItemRequest'
+                          - type: object
+                            properties:
+                              isAiGenerated:
+                                type: boolean
+                                default: false
       responses:
         '201':
-          description: Item đã tạo
+          description: Item or AI batch created; committed result replayed for the same Idempotency-Key.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ItineraryItem'
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - $ref: '#/components/schemas/ItineraryItem'
+                      - type: array
+                        items:
+                          $ref: '#/components/schemas/ItineraryItem'
         '400':
           $ref: '#/components/responses/ValidationError'
         '401':
@@ -1354,7 +1407,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/TripImmutable'
+          $ref: '#/components/responses/MutationConflict'
 
   /trips/{tripId}/itinerary/{itemId}:
     parameters:
@@ -1389,7 +1442,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/TripImmutable'
+          $ref: '#/components/responses/MutationConflict'
 
     delete:
       tags: [Itinerary]
@@ -1407,9 +1460,8 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/TripImmutable'
+          $ref: '#/components/responses/MutationConflict'
 
-  # ── Expense ───────────────────────────────────────────────────
   /trips/{tripId}/expense:
     parameters:
       - $ref: '#/components/parameters/tripId'
@@ -1461,7 +1513,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
 
     patch:
       tags: [Expenses]
@@ -1497,7 +1549,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
 
   /trips/{tripId}/expense/submit:
     post:
@@ -1527,7 +1579,8 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
+
         '422':
           description: Cần justification (variance 0–10%) hoặc không có items
           content:
@@ -1587,7 +1640,8 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
+
         '422':
           description: Variance > 10%, Manager chưa re-approve
           content:
@@ -1639,7 +1693,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
 
   /trips/{tripId}/expense/reapprove:
     post:
@@ -1652,6 +1706,7 @@ paths:
         **Roles:** MANAGER (manager của employee).
         **BR-TR-05:** Chỉ gọi khi managerReapprovalRequired = true.
       parameters:
+        - $ref: '#/components/parameters/idempotencyKey'
         - $ref: '#/components/parameters/tripId'
       requestBody:
         required: true
@@ -1697,9 +1752,8 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
 
-  # ── Expense Items ─────────────────────────────────────────────
   /trips/{tripId}/expense/items:
     parameters:
       - $ref: '#/components/parameters/tripId'
@@ -1708,6 +1762,8 @@ paths:
       tags: [Expense Items]
       summary: Thêm khoản chi
       operationId: createExpenseItem
+      parameters:
+        - $ref: '#/components/parameters/idempotencyKey'
       security:
         - BearerAuth: []
       description: |
@@ -1735,7 +1791,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
 
   /trips/{tripId}/expense/items/{itemId}:
     parameters:
@@ -1770,7 +1826,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
 
     delete:
       tags: [Expense Items]
@@ -1788,9 +1844,8 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/InvalidState'
+          $ref: '#/components/responses/MutationConflict'
 
-  # ── AI ────────────────────────────────────────────────────────
   /ai/generate-itinerary:
     post:
       tags: [AI]
