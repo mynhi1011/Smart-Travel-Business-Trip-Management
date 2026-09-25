@@ -152,6 +152,11 @@ function buildPrompt(input: GenerateItineraryInput, attempt = 0): string {
   const perDiem = input.perDiemPerDay === undefined
     ? 'Không có dữ liệu hạn mức'
     : formatCurrencyVND(input.perDiemPerDay);
+  const dayPlan = input.days === 1
+    ? `- Chuyến chỉ có 1 ngày: sắp xếp theo thứ tự di chuyển ${origin} → ${destination}, ổn định/check-in, hoạt động phục vụ mục đích công tác và nếu hợp lý thì chuẩn bị di chuyển về ${origin}; không bịa lịch cụ thể.`
+    : `- Ngày 1 (${input.departureDate}): ưu tiên TRANSPORT cho hành trình ${origin} → ${destination}, sau đó hoạt động ổn định/check-in và chuẩn bị tài liệu/công việc.
+- Các ngày giữa: phân bổ hoạt động theo MORNING, AFTERNOON, EVENING; nội dung phải phục vụ mục đích công tác đã cung cấp, có thời gian nghỉ hợp lý và không lặp mô tả chung chung.
+- Ngày cuối (${requestedEndDate}): ưu tiên hoàn thành việc còn lại, check-out, sau đó TRANSPORT ${destination} → ${origin}; không xếp hoạt động công việc sau khi đã di chuyển về.`;
   const strictConstraint = attempt >= 1
     ? `\nRÀNG BUỘC CỨNG (lần thử ${attempt + 1}): Tổng estimatedCost của tất cả items PHẢI nhỏ hơn hoặc bằng ${budgetLabel}. Đây là giới hạn bắt buộc, không được vượt quá.`
     : '';
@@ -214,11 +219,15 @@ Chỉ trả về MỘT đối tượng JSON hợp lệ thuần túy (không mark
 
 【YÊU CẦU NỘI DUNG】
 1. dayNumber chạy từ 1 đến ${input.days}; date phải đúng ngày khởi hành + (dayNumber - 1).
-2. Mỗi ngày có ít nhất 2 items (ví dụ TRANSPORT/ACCOMMODATION + MEAL); phân bổ theo buổi sáng/chiều/tối.
-3. estimatedCost là số nguyên VND không âm; totalEstimatedCost bằng tổng estimatedCost của tất cả items và không vượt ${budgetLabel}.
-4. Các chi phí là ước tính, không phải báo giá. Không bịa lịch bay, tên khách sạn, giờ họp cụ thể hoặc tình trạng booking.
-5. Chỉ trả về JSON đúng schema ở trên.`;
-}
+2. Phải có item cho TỪNG ngày liên tiếp từ ${input.departureDate} đến ${requestedEndDate}; không bỏ ngày, không tạo ngày ngoài khoảng Trip Request.
+3. Mỗi ngày có ít nhất 2 items và nên thể hiện trình tự thời gian bằng timeSlot; activity phải cụ thể, tự nhiên, khác nhau theo ngày, không lặp câu chung chung.
+4. Kế hoạch theo ngày bắt buộc:
+${dayPlan}
+5. Chỉ dùng thông tin Trip đã xác thực: origin, destination, purpose, ngày, budget và preferences. Nếu thiếu dữ liệu thì dùng mô tả trung tính như "khu vực phù hợp", "địa điểm công tác" hoặc "phương tiện phù hợp"; không tự đặt tên khách sạn, chuyến bay, lịch họp, thời gian cụ thể hay booking.
+6. estimatedCost là số nguyên VND không âm; totalEstimatedCost bằng tổng estimatedCost của tất cả items và không vượt ${budgetLabel}.
+7. Các chi phí là ước tính, không phải báo giá thật. Không bịa lịch bay, tên khách sạn, giờ họp cụ thể hoặc tình trạng booking.
+8. Chỉ trả về JSON đúng schema ở trên.`;
+} 
 
 // ─── Output Guardrail ─────────────────────────────────────────────────────────
 

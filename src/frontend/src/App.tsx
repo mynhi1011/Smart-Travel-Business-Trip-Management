@@ -70,6 +70,7 @@ type Trip = {
   requiresLevel2?: boolean;   // từ BE — quyết định số cấp duyệt (BR-TR-04)
   approvalReasons?: ApprovalReason[];  // snapshot lý do 2 cấp — từ BE
   level1Approval?: Level1Approval | null; // thông tin duyệt cấp 1
+  auditLogs?: Array<{ id: string; action: string; timestamp: string }>;
 };
 
 type Notification = {
@@ -291,6 +292,7 @@ function toFrontendTrip(trip: BackendTrip): Trip {
     requiresLevel2: trip.requiresLevel2,
     approvalReasons: trip.approvalReasons ?? [],
     level1Approval: trip.level1Approval ?? null,
+    auditLogs: trip.auditLogs ?? [],
   };
 }
 
@@ -611,6 +613,22 @@ function StatusBadge({ status, violations }: { status: TripStatus; violations?: 
       {!hasError && hasWarn && <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-600 border border-amber-200">Cảnh báo</span>}
     </div>
   );
+}
+
+function auditActionLabel(action: string): string {
+  const labels: Record<string, string> = {
+    TRIP_CREATED: "Khởi tạo bản nháp",
+    TRIP_SUBMITTED: "Gửi yêu cầu duyệt",
+    MANAGER_APPROVED: "Manager phê duyệt",
+    MANAGER_REJECTED: "Manager từ chối",
+    ADMIN_APPROVED: "Admin phê duyệt",
+    ADMIN_REJECTED: "Admin từ chối",
+    TRIP_STARTED: "Bắt đầu chuyến đi",
+    TRIP_ENDED: "Kết thúc chuyến đi",
+    TRIP_CLOSED: "Đóng hồ sơ",
+    AI_ITINERARY_APPLIED: "Áp dụng lịch trình AI",
+  };
+  return labels[action] ?? action;
 }
 
 function TripCard({ trip, onClick, cta }: { trip: Trip; onClick?: () => void; cta?: string }) {
@@ -1984,54 +2002,67 @@ function EmpStatus({ user, onLogout, trip, onBack }: { user: User; onLogout: () 
     return <div className="min-h-screen bg-gray-50 font-sans"><Nav user={user} onLogout={onLogout} /><main className="max-w-6xl mx-auto px-4 sm:px-6 py-12 text-center"><p className="text-sm text-red-500 mb-4">{detailError || "Không tìm thấy Trip."}</p><button onClick={onBack} className="text-xs text-gray-500 hover:text-gray-700">Về Dashboard</button></main></div>;
   }
   trip = detailTrip;
+  const managerDone = ["PENDING_ADMIN_APPROVAL", "APPROVED", "TRIP_IN_PROGRESS", "EXPENSE_DRAFT", "EXPENSE_SUBMITTED", "PENDING_MANAGER_ADDITIONAL_APPROVAL", "EXPENSE_APPROVED", "CLOSED"].includes(trip.status);
+  const adminDone = ["APPROVED", "TRIP_IN_PROGRESS", "EXPENSE_DRAFT", "EXPENSE_SUBMITTED", "PENDING_MANAGER_ADDITIONAL_APPROVAL", "EXPENSE_APPROVED", "CLOSED"].includes(trip.status);
+  const expenseDone = ["EXPENSE_SUBMITTED", "PENDING_MANAGER_ADDITIONAL_APPROVAL", "EXPENSE_APPROVED", "CLOSED"].includes(trip.status);
   const flow = [
-    { label: "Đã nộp", desc: `Nộp lúc ${trip.submittedAt}`, done: true },
-    { label: "Duyệt cấp 1 (Manager)", desc: trip.managerNote || "Chờ Manager phê duyệt", done: !!trip.managerApproved, rejected: trip.status === "REJECTED" && !trip.adminApproved },
-    { label: "Duyệt cấp 2 (Admin)", desc: trip.adminNote || ((trip.requiresLevel2 ?? false) ? "Cần phê duyệt cấp 2" : "Không bắt buộc"), done: !!trip.adminApproved, skipped: trip.status === "APPROVED" && !(trip.requiresLevel2 ?? false) },
-    { label: "Đã duyệt", desc: ["APPROVED","TRIP_IN_PROGRESS","EXPENSE_DRAFT"].includes(trip.status) ? "Chuyến đi được phê duyệt" : "Chờ hoàn tất phê duyệt", done: ["APPROVED","TRIP_IN_PROGRESS","EXPENSE_DRAFT","EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","EXPENSE_APPROVED","CLOSED"].includes(trip.status) },
-    { label: "Quyết toán chi phí", desc: ["EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","EXPENSE_APPROVED","CLOSED"].includes(trip.status) ? "Đã nộp báo cáo chi phí" : "Sau chuyến đi nộp chi phí thực tế", done: ["EXPENSE_SUBMITTED","PENDING_MANAGER_ADDITIONAL_APPROVAL","EXPENSE_APPROVED","CLOSED"].includes(trip.status) },
-    { label: "Đóng hồ sơ", desc: trip.financeNote || "Finance xem xét và đóng hồ sơ", done: trip.status === "CLOSED" },
+    { label: "Đã tạo", desc: "Bản nháp", done: true },
+    { label: "Duyệt cấp 1", desc: managerDone ? "Manager đã duyệt" : "Chờ Manager duyệt", done: managerDone },
+    { label: "Duyệt cấp 2", desc: trip.requiresLevel2 ? (adminDone ? "Admin đã duyệt" : "Chờ Admin duyệt") : "Không bắt buộc", done: adminDone, skipped: !trip.requiresLevel2 },
+    { label: "Quyết toán", desc: expenseDone ? "Đã nộp chi phí thực tế" : "Chi phí thực tế", done: expenseDone },
+    { label: "Đóng hồ sơ", desc: trip.status === "CLOSED" ? "Finance đã đóng hồ sơ" : "Finance đóng hồ sơ sau quyết toán", done: trip.status === "CLOSED" },
   ];
+  const activeIndex = flow.findIndex((item, index) => !item.done && !flow[index - 1]?.done) === -1
+    ? flow.length - 1
+    : Math.max(0, flow.findIndex(item => !item.done));
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Nav user={user} onLogout={onLogout} />
-      <PageHeader label={trip.tripCode} title={`${trip.from} — ${trip.to}`} subtitle="Theo dõi trạng thái phê duyệt" />
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7">
-        <div className="mb-4"><button onClick={onBack} className="text-xs text-gray-400 hover:text-gray-600">Về Dashboard</button></div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          <Card className="p-6 lg:col-span-2">
-            <div className="flex flex-col gap-0">
-              {flow.map((s, i) => (
-                <div key={s.label} className="flex gap-4">
-                  <div className="flex flex-col items-center">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${s.rejected ? "bg-red-100 text-red-500 border-2 border-red-300" : s.skipped ? "bg-gray-100 text-gray-400 border border-dashed border-gray-300" : s.done ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-400"}`}>
-                      {s.rejected ? "×" : s.skipped ? "—" : s.done ? "✓" : i + 1}
-                    </div>
-                    {i < flow.length - 1 && <div className={`w-0.5 h-8 mt-1 ${s.done ? "bg-emerald-400" : "bg-gray-200"}`} />}
-                  </div>
-                  <div className="pb-5">
-                    <p className={`text-sm font-semibold ${s.rejected ? "text-red-500" : s.skipped ? "text-gray-400" : s.done ? "text-emerald-700" : "text-gray-400"}`}>
-                      {s.label}{s.skipped ? " (bỏ qua)" : ""}
-                    </p>
-                    <p className="text-xs text-gray-400 mt-0.5">{s.desc}</p>
-                  </div>
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+        <button onClick={onBack} className="mb-3 text-xs text-gray-400 hover:text-gray-600">← Về Dashboard</button>
+        <div className="mb-5">
+          <span className="inline-flex rounded bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-700">{trip.tripCode}</span>
+          <h1 className="mt-1 text-xl font-bold text-[#1b2f35]">{trip.from} — {trip.to}</h1>
+          <p className="text-xs text-gray-400">Theo dõi trạng thái phê duyệt · Cập nhật lần cuối hôm nay</p>
+        </div>
+        <Card className="mb-5 overflow-hidden p-5 sm:p-6">
+          <div className="flex items-start">
+            {flow.map((s, i) => (
+              <div key={s.label} className="flex min-w-0 flex-1 items-start">
+                <div className="flex min-w-[54px] flex-col items-center text-center">
+                  <div className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold ${s.done ? "bg-emerald-500 text-white" : i === activeIndex ? "border border-blue-500 text-blue-600" : "border border-gray-200 bg-gray-50 text-gray-400"}`}>{s.done ? "✓" : i + 1}</div>
+                  <p className={`mt-1 text-[10px] font-semibold ${s.done || i === activeIndex ? "text-[#1b2f35]" : "text-gray-400"}`}>{s.label}</p>
+                  <p className="text-[9px] text-gray-400">{s.desc}</p>
                 </div>
-              ))}
+                {i < flow.length - 1 && <div className={`mt-3 h-px flex-1 border-t ${s.done ? "border-emerald-400" : "border-dashed border-gray-200"}`} />}
+              </div>
+            ))}
+          </div>
+        </Card>
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+          <Card className="p-5 sm:p-6 lg:col-span-2">
+            <h2 className="border-b border-gray-100 pb-3 text-sm font-semibold text-[#1b2f35]">Thông tin chi tiết chuyến đi</h2>
+            <div className="grid grid-cols-1 gap-5 pt-4 sm:grid-cols-2">
+              <div><p className="text-[10px] text-gray-400">Thời gian dự kiến</p><p className="mt-1 text-xs font-medium text-[#1b2f35]">{trip.departDate} – {trip.returnDate} ({Math.max(1, Math.round((new Date(trip.returnDate.split("/").reverse().join("-")).getTime() - new Date(trip.departDate.split("/").reverse().join("-")).getTime()) / 86400000) + 1)} ngày)</p></div>
+              <div><p className="text-[10px] text-gray-400">Lộ trình di chuyển</p><p className="mt-1 text-xs font-medium text-[#1b2f35]">{trip.from} → {trip.to} → {trip.from}</p></div>
+              <div><p className="text-[10px] text-gray-400">Mục tiêu công tác</p><p className="mt-1 text-xs font-medium text-[#1b2f35]">{trip.purpose}</p></div>
+            </div>
+            <div className="mt-5 grid grid-cols-2 gap-4 rounded-lg border border-gray-100 bg-gray-50 p-3">
+              <div><p className="text-[10px] text-gray-400">Tổng dự toán ngân sách</p><p className="mt-1 text-sm font-bold text-emerald-600">{trip.budget.toLocaleString("vi-VN")} đ</p></div>
             </div>
           </Card>
-          <div className="flex flex-col gap-3">
-            <Card className="p-4">
-              <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-2">Trạng thái</p>
-              <StatusBadge status={trip.status} violations={trip.policyViolations} />
-            </Card>
-            {trip.policyViolations && trip.policyViolations.length > 0 && (
-              <Card className="p-4">
-                <p className="text-xs font-semibold tracking-wider text-gray-400 uppercase mb-2">Cảnh báo chính sách</p>
-                <PolicyBanner violations={trip.policyViolations} />
-              </Card>
-            )}
-          </div>
+          <Card className="p-5 sm:p-6">
+            <h2 className="border-b border-gray-100 pb-3 text-sm font-semibold text-[#1b2f35]">Trạng thái phê duyệt</h2>
+            <div className="mt-3 rounded-lg bg-amber-50 p-3"><StatusBadge status={trip.status} violations={trip.policyViolations} /><p className="mt-1 text-[10px] text-gray-500">Người duyệt: {trip.managerApproved ? "Manager" : "Chờ Manager phê duyệt"}</p></div>
+            <p className="mt-4 text-[10px] font-semibold uppercase tracking-wide text-gray-400">Lịch sử thao tác</p>
+            <div className="mt-2 space-y-2 text-[10px] text-gray-500">
+              {(trip.auditLogs ?? []).length === 0 && <p className="text-gray-400">Chưa có thao tác được ghi nhận.</p>}
+              {(trip.auditLogs ?? []).map(log => <p key={log.id}><span className="mr-2 text-emerald-500">●</span>{auditActionLabel(log.action)} <span className="float-right text-gray-400">{new Date(log.timestamp).toLocaleString("vi-VN")}</span></p>)}
+            </div>
+            <div className="mt-4 flex gap-2"><button onClick={onBack} className="flex-1 rounded-lg bg-gray-100 px-2 py-2 text-[10px] font-semibold text-gray-600 hover:bg-gray-200">Về Dashboard</button>{trip.status === "DRAFT" && <button onClick={onBack} className="flex-1 rounded-lg bg-emerald-50 px-2 py-2 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-100">Sửa hồ sơ</button>}</div>
+          </Card>
         </div>
+        {trip.policyViolations && trip.policyViolations.length > 0 && <div className="mt-5"><PolicyBanner violations={trip.policyViolations} /></div>}
       </main>
     </div>
   );

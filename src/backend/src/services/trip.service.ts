@@ -248,6 +248,13 @@ export async function getTripById(
 
   if (!canAccess) throw Errors.FORBIDDEN();
 
+  // AuditLog dùng entityType/entityId đa hình, không có Prisma relation trực tiếp với Trip.
+  const auditLogs = await prisma.auditLog.findMany({
+    where: { entityType: 'TRIP', entityId: tripId },
+    orderBy: { timestamp: 'asc' },
+    select: { id: true, action: true, timestamp: true },
+  });
+
   // Lấy level1Approval từ approval_records
   const l1Record = (trip.approvalRecords as Array<{
     approvalLevel: string; action: string;
@@ -270,6 +277,7 @@ export async function getTripById(
       approvedAt:   l1Record.actedAt,
       comment:      l1Record.comment,
     } : null,
+    auditLogs,
   };
 }
 

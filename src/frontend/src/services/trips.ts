@@ -56,6 +56,7 @@ export interface BackendTrip {
   } | null;
   /** Thông tin duyệt cấp 1 — có khi trip ở PENDING_ADMIN_APPROVAL hoặc APPROVED */
   level1Approval: Level1Approval | null;
+  auditLogs?: Array<{ id: string; action: string; timestamp: string }>;
 }
 
 interface PaginatedTrips { data: BackendTrip[] }

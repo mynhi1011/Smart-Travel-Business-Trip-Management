@@ -94,6 +94,35 @@ describe('Gemini itinerary client', () => {
     expect(prompt).toContain('Không có dữ liệu hạn mức');
   });
 
+  it('grounds a three-day Da Nang to Ha Noi itinerary in chronological daily phases', async () => {
+    geminiMocks.generateContent.mockResolvedValueOnce(response({
+      items: [10, 11, 12].flatMap((day, index) => [
+        { dayNumber: index + 1, date: `2026-10-${day}`, timeSlot: 'MORNING', location: 'Địa điểm công tác', activity: `Hoạt động công tác ngày ${index + 1}`, category: 'MEETING', estimatedCost: 100_000 },
+        { dayNumber: index + 1, date: `2026-10-${day}`, timeSlot: 'EVENING', location: 'Khu vực phù hợp', activity: `Nghỉ ngơi ngày ${index + 1}`, category: 'OTHER', estimatedCost: 50_000 },
+      ]),
+      totalEstimatedCost: 450_000,
+    }));
+    await generateItinerary({
+      ...input,
+      days: 3,
+      departureDate: '2026-10-10',
+      returnDate: '2026-10-12',
+      origin: 'Đà Nẵng',
+      destination: 'Hà Nội',
+      purpose: 'Khảo sát thị trường và làm việc với đối tác',
+      preferences: 'Ưu tiên họp buổi sáng',
+    });
+    const prompt = (geminiMocks.generateContent.mock.calls[0][0] as { contents: string }).contents;
+
+    expect(prompt).toContain('Ngày 1 (2026-10-10)');
+    expect(prompt).toContain('Đà Nẵng → Hà Nội');
+    expect(prompt).toContain('Các ngày giữa');
+    expect(prompt).toContain('Ngày cuối (2026-10-12)');
+    expect(prompt).toContain('Hà Nội → Đà Nẵng');
+    expect(prompt).toContain('Khảo sát thị trường và làm việc với đối tác');
+    expect(prompt).toContain('Ưu tiên họp buổi sáng');
+  });
+
   it('rejects malformed calendar dates and incomplete day coverage', async () => {
     geminiMocks.generateContent.mockResolvedValueOnce({
       text: JSON.stringify({
