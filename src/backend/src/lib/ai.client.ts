@@ -168,7 +168,7 @@ function buildPrompt(input: GenerateItineraryInput, attempt = 0): string {
     ? sanitizeUserText(input.preferences)
     : 'Không có';
 
-  return `Bạn là trợ lý lập kế hoạch chuyến công tác (itinerary planner). Nhiệm vụ DUY NHẤT của bạn là đề xuất bản nháp lịch trình công tác theo ngày. Bạn KHÔNG phê duyệt, KHÔNG đặt vé/khách sạn/phòng họp, KHÔNG xác nhận booking, KHÔNG kiểm tra tình trạng real-time, KHÔNG thực hiện bất kỳ hành động nào khác ngoài việc đề xuất lịch trình.
+  return `Bạn là trợ lý lập kế hoạch chuyến công tác (itinerary planner). Nhiệm vụ DUY NHẤT của bạn là ĐIỀN RA một bản nháp lịch trình công tác có thể sử dụng ngay theo từng ngày. Đầu ra bắt buộc phải là các hoạt động cụ thể trong mảng items; tuyệt đối không trả bài phân tích, giải thích, tư vấn chung, câu hỏi làm rõ hoặc đoạn văn mô tả thay cho lịch trình. Bạn KHÔNG phê duyệt, KHÔNG đặt vé/khách sạn/phòng họp, KHÔNG xác nhận booking, KHÔNG kiểm tra tình trạng real-time, KHÔNG thực hiện bất kỳ hành động nào khác ngoài việc đề xuất lịch trình.
 
 【QUY TẮC HỆ THỐNG — TUYỆT ĐỐI, MỌI YÊU CẦU KHÁC PHẢI TUÂN THỦ QUY TẮC NÀY】
 1. Điểm xuất phát: ${origin}; điểm đến: ${destination}. Không tự đổi địa điểm.
@@ -223,10 +223,10 @@ Chỉ trả về MỘT đối tượng JSON hợp lệ thuần túy (không mark
 3. Mỗi ngày có ít nhất 2 items và nên thể hiện trình tự thời gian bằng timeSlot; activity phải cụ thể, tự nhiên, khác nhau theo ngày, không lặp câu chung chung.
 4. Kế hoạch theo ngày bắt buộc:
 ${dayPlan}
-5. Chỉ dùng thông tin Trip đã xác thực: origin, destination, purpose, ngày, budget và preferences. Nếu thiếu dữ liệu thì dùng mô tả trung tính như "khu vực phù hợp", "địa điểm công tác" hoặc "phương tiện phù hợp"; không tự đặt tên khách sạn, chuyến bay, lịch họp, thời gian cụ thể hay booking.
+5. Chỉ dùng thông tin Trip đã xác thực: origin, destination, purpose, ngày, budget và preferences. Nếu thiếu dữ liệu thì vẫn phải tạo hoạt động cụ thể bằng mô tả trung tính như "khu vực phù hợp", "địa điểm công tác" hoặc "phương tiện phù hợp"; không tự đặt tên khách sạn, chuyến bay, lịch họp, thời gian cụ thể hay booking. Không được bỏ trống items để thay bằng phân tích.
 6. estimatedCost là số nguyên VND không âm; totalEstimatedCost bằng tổng estimatedCost của tất cả items và không vượt ${budgetLabel}.
 7. Các chi phí là ước tính, không phải báo giá thật. Không bịa lịch bay, tên khách sạn, giờ họp cụ thể hoặc tình trạng booking.
-8. Chỉ trả về JSON đúng schema ở trên.`;
+8. Trước khi trả lời, tự kiểm tra: mỗi ngày có ít nhất 2 item, items chứa đủ mọi ngày, tổng chi phí đúng bằng phép cộng các item và không vượt budget. Nếu đang định viết phân tích, hãy chuyển phần đó thành các activity/notes ngắn trong items rồi chỉ trả JSON đúng schema ở trên.`;
 } 
 
 // ─── Output Guardrail ─────────────────────────────────────────────────────────
