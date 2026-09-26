@@ -11,16 +11,16 @@
 ### [US-01] Khởi tạo Trip Request cơ bản
 - **User Story:** Là **Nguyễn Văn Nam (Employee)**, tôi muốn nhập thông tin chuyến đi (điểm đi, điểm đến, ngày đi, ngày về, mục đích và tổng dự toán) để tạo một yêu cầu công tác mới dưới dạng bản nháp.
 - **Requirement gốc:** `REQ-TR-01`
-- **Business Rule liên quan:** `BR-TR-02`, `BR-TR-03`, `BR-TR-08`
+- **Business Rule liên quan:** `BR-TR-01`, `BR-TR-02`, `BR-TR-03`, `BR-TR-08`
 - **Acceptance Criteria:**
   - **AC 1.1 (Happy path - Tạo yêu cầu thông thường):**  
     *Given* Employee đã đăng nhập vào hệ thống  
     *When* Employee nhập đầy đủ Điểm xuất phát, Điểm đến, Ngày đi, Ngày về, Lý do công tác và Dự toán chi phí với ngày khởi hành cách ngày hiện tại ≥ 3 ngày làm việc (tuân thủ `BR-TR-03`)  
     *Then* Hệ thống lưu Trip Request với trạng thái `DRAFT` và cấp mã định danh chuyến đi.
-  - **AC 1.2 (Kiểm tra phụ cấp Per Diem tự động):**  
-    *Given* Employee đang lập dự toán cho mục phụ cấp cá nhân  
-    *When* Employee chọn điểm đến là Đô thị loại 1 (Hà Nội, TP.HCM, Đà Nẵng) hoặc tỉnh thành khác  
-    *Then* Hệ thống tự động tính hạn mức `Max_Per_Diem = Số ngày * Mức khoán` (400.000 VNĐ/ngày với Đô thị loại 1 hoặc 300.000 VNĐ/ngày với tỉnh khác theo `BR-TR-02`)
+  - **AC 1.2 (Kiểm tra tổng hạn mức lưu trú + phụ cấp tự động):**  
+    *Given* Employee đã nhập Điểm đến, Ngày đi, Ngày về và Dự toán chi phí (`estimatedBudget`)  
+    *When* Hệ thống tính hạn mức kết hợp dựa trên cấp bậc (`jobGrade`) của Employee đăng nhập và loại điểm đến (`destinationType` tự suy từ `destination`)  
+    *Then* Hệ thống tính `Combined_Limit = (Hạn mức lưu trú/đêm theo BR-TR-01 × số đêm) + (Số ngày × Mức phụ cấp/ngày theo BR-TR-02)`; nếu `estimatedBudget` vượt `Combined_Limit` thì gắn đúng một cảnh báo tổng hợp `COMBINED_COST_LIMIT_EXCEEDED` theo `BR-TR-08` (không cảnh báo riêng cho khách sạn hay phụ cấp).
   - **AC 1.3 (Xử lý chuyến đi khẩn cấp):**  
     *Given* Employee tạo yêu cầu công tác có ngày khởi hành < 3 ngày làm việc so với ngày tạo  
     *When* Employee bấm lưu/tiếp tục  
@@ -192,7 +192,7 @@
 
 | Story ID | Tên User Story | REQ-ID liên quan | Business Rule (BR-ID) | Priority |
 |---|---|---|---|---|
-| **US-01** | Khởi tạo Trip Request cơ bản | `REQ-TR-01` | `BR-TR-02`, `BR-TR-03`, `BR-TR-08` | Must |
+| **US-01** | Khởi tạo Trip Request cơ bản | `REQ-TR-01` | `BR-TR-01`, `BR-TR-02`, `BR-TR-03`, `BR-TR-08` | Must |
 | **US-02** | AI sinh gợi ý lịch trình công tác theo ràng buộc | `REQ-TR-02` | `BR-TR-07` | Must |
 | **US-03** | Xem và tùy chỉnh chi tiết Lịch trình công tác | `REQ-TR-06` | `BR-TR-01`, `BR-TR-08` | Must |
 | **US-04** | Tự động kiểm tra vi phạm chính sách công tác | `REQ-TR-03` | `BR-TR-08`, `BR-TR-03`, `BR-TR-04` | Must |
