@@ -61,14 +61,7 @@ Cho phép Employee tạo một Trip Request mới với đầy đủ thông tin 
   "estimatedBudget": 8500000
 }
 ```
-*Ghi chú: `destinationType` không gửi — server tự suy. Không có `hotelCostPerNight`, `perDiemBudget`.*  "estimatedBudget": 5000000,
-  "hotelCostPerNight": 800000,
-  "hotelNights": 2,
-  "perDiemBudget": 1200000,
-  "transportBudget": 1500000,
-  "otherBudget": 500000
-}
-```
+*Ghi chú: `destinationType` không gửi — server tự suy. Không có `hotelCostPerNight`, `hotelNights`, `perDiemBudget`, `transportBudget`, `otherBudget` — client chỉ gửi một `estimatedBudget` duy nhất cho cả chuyến đi (D-16).*
 
 **Fields bị server strip (không nhận từ client):** `tripDays`, `isUrgent`, `requiresLevel2`, `status`, `employeeId`.
 
@@ -109,7 +102,7 @@ Resource-level: `employeeId` luôn được set bởi server = `req.user.id`, cl
 | `returnDate >= departureDate` | Logic | Client + Server | 400 nếu vi phạm |
 | `departureDate >= today` | Logic | Client + Server | 400 nếu vi phạm |
 | `estimatedBudget > 0`, integer | ASM-TR-02 | Client + Server | 400 nếu vi phạm |
-| Per diem tham chiếu: `Max = tripDays × rate` | BR-TR-02, BR-TR-08 | Dùng làm thành phần của hạn mức tổng hợp; cảnh báo duy nhất theo BR-TR-08 | Không cảnh báo riêng, không yêu cầu lý do |
+| Hạn mức lưu trú + phụ cấp tham chiếu: `Combined_Limit = Hotel_Limit[jobGrade]×hotelNights + Per_Diem_Rate[destinationType]×tripDays` | BR-TR-01, BR-TR-02, BR-TR-08 | Dùng làm hạn mức tổng hợp so với `estimatedBudget`; cảnh báo duy nhất theo BR-TR-08 | Không cảnh báo riêng, không yêu cầu lý do |
 | `departureDate < 3 ngày làm việc` → urgent | BR-TR-03 | Server (tính working days) | `is_urgent = true`; UI bắt nhập `urgencyReason` |
 | `urgencyReason` bắt buộc khi `is_urgent = true` | BR-TR-03 | Server (CHECK constraint) | 400 nếu thiếu |
 | `tripDays` = generated column, không nhận từ client | data-model | Server (strip) | Bỏ qua nếu client gửi |
@@ -124,10 +117,9 @@ Resource-level: `employeeId` luôn được set bởi server = `req.user.id`, cl
 
 BR-TR-01 và BR-TR-02 chỉ cung cấp các mức thành phần để tính tổng hạn mức; chúng không tự phát sinh cảnh báo và không yêu cầu nhập lý do. Việc kiểm tra duy nhất đối với hai khoản này được thực hiện theo BR-TR-08 tại Policy Check:
 
-- `Combined_Actual = (hotelCostPerNight × hotelNights) + perDiemBudget`
+- `Combined_Actual = estimatedBudget` (client chỉ nhập một ngân sách tổng, không tách hotelCostPerNight/perDiemBudget riêng — D-16)
 - `Combined_Limit = (Hotel_Limit[jobGrade] × hotelNights) + (tripDays × Per_Diem_Rate[destinationType])`
 - Chỉ hiển thị một cảnh báo tổng hợp nếu `Combined_Actual > Combined_Limit`; không yêu cầu nhập lý do.
-- Nếu thiếu dữ liệu của một khoản chi phí tùy chọn, chỉ cộng các khoản được cung cấp; không tự suy diễn giá trị còn thiếu.
 
 ### Bảng 1 — Ma trận validation NGÀY (BR-TR-03, Advance Notice Rule)
 
@@ -153,10 +145,10 @@ BR-TR-01 và BR-TR-02 chỉ cung cấp các mức thành phần để tính tổ
 
 | Trường hợp | Hành vi |
 |---|---|
-| `perDiemBudget` không được cung cấp | Cho phép để trống nếu field này là tùy chọn; không tạo cảnh báo độc lập. |
-| Per diem vượt mức thành phần nhưng tổng hợp không vượt hạn mức | Không cảnh báo. |
-| Tổng chi phí lưu trú và per diem vượt tổng hạn mức BR-TR-08 | Policy Check hiển thị đúng một cảnh báo tổng hợp; không yêu cầu lý do. |
-| `perDiemBudget` âm hoặc sai kiểu dữ liệu | Validation dữ liệu thông thường trả `400`; đây không phải cảnh báo policy. |
+| `estimatedBudget` (Combined_Actual) ≤ `Combined_Limit` | Không cảnh báo. |
+| Per diem vượt mức thành phần nhưng tổng hợp (`estimatedBudget`) không vượt `Combined_Limit` | Không cảnh báo. |
+| Tổng chi phí lưu trú và per diem (`estimatedBudget`) vượt tổng hạn mức BR-TR-08 | Policy Check hiển thị đúng một cảnh báo tổng hợp; không yêu cầu lý do. |
+| `estimatedBudget` âm, bằng 0, hoặc sai kiểu dữ liệu | Validation dữ liệu thông thường trả `400`; đây không phải cảnh báo policy. |
 
 ### Tóm tắt Hard Validation và Policy Warning
 
@@ -185,8 +177,8 @@ BR-TR-01 và BR-TR-02 chỉ cung cấp các mức thành phần để tính tổ
 | ID | Loại | Mô tả | Expected |
 |---|---|---|---|
 | T1.1 | Happy path | Submit form hợp lệ, ngày đi > 3 ngày làm việc | 201, `status=DRAFT`, `isUrgent=false` |
-| T1.2 | Happy path | Submit với `perDiemBudget` đúng hạn mức | 201, không cảnh báo |
-| T1.3 | AC 1.2 | Per diem vượt hạn mức thành phần nhưng tổng BR-TR-08 không vượt | Không cảnh báo riêng; Policy Check không tạo warning tổng hợp |
+| T1.2 | Happy path | Submit với `estimatedBudget` ≤ `Combined_Limit` (BR-TR-08) | 201, không cảnh báo |
+| T1.3 | AC 1.2 | Submit với `estimatedBudget` > `Combined_Limit` (BR-TR-08) | 201, Policy Check tạo đúng một cảnh báo tổng hợp `COMBINED_COST_LIMIT_EXCEEDED`; không yêu cầu lý do |
 | T1.4 | AC 1.3 | `departureDate` = ngày mai (< 3 ngày làm việc) | `is_urgent=true`; thiếu `urgencyReason` → 400 |
 | T1.5 | AC 1.3 | Điền `urgencyReason` khi urgent | 201, `is_urgent=true` |
 | T1.6 | Error E-01 | Thiếu `purpose` | 400, field `purpose` được highlight |
