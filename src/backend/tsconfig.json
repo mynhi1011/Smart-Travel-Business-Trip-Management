@@ -5,8 +5,8 @@
     "lib": ["ES2020"],
 
     /* Modules */
-    "module": "CommonJS",
-    "moduleResolution": "bundler",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,

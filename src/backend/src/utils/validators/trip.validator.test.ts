@@ -26,16 +26,10 @@ const PAST_DATE = '2020-01-01'; // chắc chắn trong quá khứ
 const VALID_PAYLOAD = {
   origin: 'Hà Nội',
   destination: 'TP. Hồ Chí Minh',
-  destinationType: 'TIER1_CITY' as const,
   departureDate: FUTURE_DATE,
   returnDate: FUTURE_DATE_LATER,
   purpose: 'Tham dự hội nghị khách hàng khu vực phía Nam năm 2099',
   estimatedBudget: 8_000_000,
-  hotelCostPerNight: 800_000,
-  hotelNights: 4,
-  perDiemBudget: 1_600_000,   // 4 ngày × 400k TIER1_CITY — đúng hạn mức
-  transportBudget: 3_200_000,
-  otherBudget: 400_000,
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -56,7 +50,6 @@ describe('createTripSchema', () => {
       // Assert field values đúng sau parse
       expect(result.data.origin).toBe('Hà Nội');
       expect(result.data.destination).toBe('TP. Hồ Chí Minh');
-      expect(result.data.destinationType).toBe('TIER1_CITY');
       expect(result.data.estimatedBudget).toBe(8_000_000);
     });
 
@@ -64,7 +57,6 @@ describe('createTripSchema', () => {
       const minPayload = {
         origin: 'Hà Nội',
         destination: 'Đà Nẵng',
-        destinationType: 'OTHER',
         departureDate: FUTURE_DATE,
         returnDate: FUTURE_DATE_LATER,
         purpose: 'Thăm khách hàng tại Đà Nẵng để thảo luận dự án',
@@ -107,7 +99,6 @@ describe('createTripSchema', () => {
     it.each([
       ['origin',         { ...VALID_PAYLOAD, origin: undefined }],
       ['destination',    { ...VALID_PAYLOAD, destination: undefined }],
-      ['destinationType',{ ...VALID_PAYLOAD, destinationType: undefined }],
       ['departureDate',  { ...VALID_PAYLOAD, departureDate: undefined }],
       ['returnDate',     { ...VALID_PAYLOAD, returnDate: undefined }],
       ['purpose',        { ...VALID_PAYLOAD, purpose: undefined }],
@@ -142,12 +133,12 @@ describe('createTripSchema', () => {
       expect(result.success).toBe(false);
     });
 
-    it('destinationType là giá trị ngoài enum → parse fail', () => {
+    it('destinationType là field legacy → bị strip theo D-16', () => {
       const result = createTripSchema.safeParse({
         ...VALID_PAYLOAD,
         destinationType: 'INVALID_TYPE', // không phải TIER1_CITY hoặc OTHER
       });
-      expect(result.success).toBe(false);
+      expect(result.success).toBe(true);
     });
 
     it('departureDate sai format (DD/MM/YYYY thay vì YYYY-MM-DD) → parse fail', () => {
@@ -219,12 +210,12 @@ describe('createTripSchema', () => {
       expect(result.success).toBe(true);
     });
 
-    it('hotelCostPerNight âm → parse fail', () => {
+    it('hotelCostPerNight legacy không còn thuộc request contract', () => {
       const result = createTripSchema.safeParse({
         ...VALID_PAYLOAD,
         hotelCostPerNight: -100,
       });
-      expect(result.success).toBe(false);
+      expect(result.success).toBe(true);
     });
 
     it('perDiemBudget = 0 → parse success (optional, 0 hợp lệ)', () => {
@@ -292,25 +283,18 @@ describe('checkPerDiemWarning', () => {
     expect(result).toBeNull();
   });
 
-  it('[BIZ] perDiemBudget vượt hạn mức TIER1_CITY → trả về warning với đầy đủ info', () => {
+  it('[D-16] perDiemBudget không còn tạo warning riêng', () => {
     // Hạn mức: 4 ngày × 400k = 1,600,000 — gửi 2,000,000
     const result = checkPerDiemWarning(2_000_000, 'TIER1_CITY', 4);
 
-    expect(result).not.toBeNull();
-    expect(result?.code).toBe('POLICY_VIOLATION_PER_DIEM_EXCEEDED');
-    expect(result?.maxPerDiem).toBe(1_600_000);  // 4 × 400k
-    expect(result?.actual).toBe(2_000_000);
-    // detail phải chứa thông tin đủ để user hiểu
-    expect(result?.detail).toMatch(/400/);  // mention rate
+    expect(result).toBeNull();
   });
 
-  it('[BIZ] perDiemBudget vượt hạn mức OTHER → cảnh báo với rate 300k', () => {
+  it('[D-16] perDiemBudget OTHER không còn tạo warning riêng', () => {
     // OTHER: 300k/ngày × 5 ngày = 1,500,000 — gửi 2,000,000
     const result = checkPerDiemWarning(2_000_000, 'OTHER', 5);
 
-    expect(result).not.toBeNull();
-    expect(result?.maxPerDiem).toBe(1_500_000); // 5 × 300k
-    expect(result?.actual).toBe(2_000_000);
+    expect(result).toBeNull();
   });
 
   it('[EDGE] perDiemBudget = undefined → trả về null (không kiểm tra)', () => {
@@ -323,10 +307,9 @@ describe('checkPerDiemWarning', () => {
     expect(result).toBeNull();
   });
 
-  it('[EDGE] tripDays = 0 → hạn mức = 0, bất kỳ budget dương nào đều vi phạm', () => {
+  it('[D-16] tripDays = 0 không tạo per-diem warning riêng', () => {
     const result = checkPerDiemWarning(1, 'TIER1_CITY', 0);
-    expect(result).not.toBeNull();
-    expect(result?.maxPerDiem).toBe(0);
+    expect(result).toBeNull();
   });
 
   it('[CONST] PER_DIEM_RATE TIER1_CITY = 400,000 VNĐ/ngày theo BR-TR-02', () => {

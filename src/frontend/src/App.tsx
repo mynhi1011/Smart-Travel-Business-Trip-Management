@@ -38,7 +38,6 @@ type User = { id?: string; email: string; password?: string; name: string; role:
 
 type TripStatus =
   | "DRAFT" | "SUBMITTED"
-  | "APPROVED_MANAGER"
   | "PENDING_ADMIN_APPROVAL"
   | "APPROVED" | "REJECTED"
   | "TRIP_IN_PROGRESS"
@@ -426,7 +425,6 @@ const ROLE_LABEL: Record<Role, string> = { employee: "Nhân viên", manager: "Qu
 const STATUS_LABEL: Record<TripStatus, string> = {
   DRAFT:                               "Bản nháp",
   SUBMITTED:                           "Chờ duyệt cấp 1",
-  APPROVED_MANAGER:                    "Đã duyệt cấp 1",
   PENDING_ADMIN_APPROVAL:              "Chờ duyệt cấp 2",
   APPROVED:                            "Đã duyệt",
   TRIP_IN_PROGRESS:                    "Đang thực hiện",
@@ -441,7 +439,6 @@ const STATUS_LABEL: Record<TripStatus, string> = {
 const STATUS_STYLE: Record<TripStatus, string> = {
   DRAFT:                               "bg-gray-100 text-gray-500 border border-gray-200",
   SUBMITTED:                           "bg-amber-100 text-amber-700 border border-amber-200",
-  APPROVED_MANAGER:                    "bg-teal-100 text-teal-700 border border-teal-200",
   PENDING_ADMIN_APPROVAL:              "bg-blue-100 text-blue-700 border border-blue-200",
   APPROVED:                            "bg-emerald-100 text-emerald-700 border border-emerald-200",
   TRIP_IN_PROGRESS:                    "bg-cyan-100 text-cyan-700 border border-cyan-200",
@@ -1094,14 +1091,14 @@ function ItineraryListServer({ items, readOnly, onAdd, onUpdate, onDelete }: {
 }
 
 // ─── ApprovalItineraryPreview — read-only itinerary preview for approver ─────
-function ApprovalItineraryPreview({ tripId }: { tripId: string }) {
+function ApprovalItineraryPreview({ tripId, onAdd }: { tripId: string; onAdd?: () => void }) {
   const [items, setItems] = useState<BackendItineraryItem[]>([]);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     getItinerary(tripId).then(r => setItems(r.items)).catch(() => {}).finally(() => setLoading(false));
   }, [tripId]);
   if (loading) return <p className="text-xs text-gray-400">Đang tải lịch trình...</p>;
-  if (items.length === 0) return <p className="text-xs text-gray-400">Chưa có lịch trình.</p>;
+  if (items.length === 0) return onAdd ? <button onClick={onAdd} className="text-xs font-semibold text-emerald-600 hover:underline">+ Thêm lịch trình</button> : null;
   const preview = items.slice(0, 5);
   return (
     <div className="flex flex-col gap-1.5">
@@ -1113,6 +1110,7 @@ function ApprovalItineraryPreview({ tripId }: { tripId: string }) {
         </div>
       ))}
       {items.length > 5 && <p className="text-xs text-gray-400">...và {items.length - 5} mục khác</p>}
+      {onAdd && <button onClick={onAdd} className="mt-1 self-start text-xs font-semibold text-emerald-600 hover:underline">+ Thêm lịch trình</button>}
     </div>
   );
 }
@@ -1273,7 +1271,7 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   if (screen === "create")    return <EmpCreate user={user} onLogout={onLogout} initialDraftTripId={draftTripIdFromUrl} onSuccess={() => { void reload(); setSearchParams({}); setScreen("success"); }} onSaveDraft={() => { void reload(); setSearchParams({}); setScreen("dashboard"); }} onCancel={() => { setSearchParams({}); setScreen("dashboard"); }} />;
   if (screen === "success")   return <EmpSuccess user={user} onLogout={onLogout} onBack={() => setScreen("dashboard")} />;
   if (screen === "itinerary" && selected) return <EmpItinerary user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} />;
-  if (screen === "status"    && (selected || routeTrip)) return <EmpStatus    user={user} onLogout={onLogout} trip={selected ?? routeTrip!} onBack={() => { setSearchParams({}); setScreen("dashboard"); }} />;
+  if (screen === "status"    && (selected || routeTrip)) return <EmpStatus    user={user} onLogout={onLogout} trip={selected ?? routeTrip!} onBack={() => { setSearchParams({}); setScreen("dashboard"); }} onOpenItinerary={() => { setSelected(selected ?? routeTrip!); setSearchParams({}); setScreen("itinerary"); }} onOpenExpense={() => { setSelected(selected ?? routeTrip!); setSearchParams({}); setScreen("expense"); }} />;
   if (screen === "expense"   && selected) return <EmpExpense   user={user} onLogout={onLogout} trip={selected} onBack={() => setScreen("dashboard")} onSave={async () => { await reload(); setScreen("dashboard"); }} />;
 
   const filtered = myTrips.filter(t => filter === "all" || t.status === filter);
@@ -1292,7 +1290,6 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                 { key: "all",                                  label: "Tất cả",             color: "gray"    },
                 { key: "DRAFT",                                label: "Bản nháp",           color: "zinc"    },
                 { key: "SUBMITTED",                            label: "Chờ duyệt cấp 1",   color: "amber"   },
-                { key: "APPROVED_MANAGER",                     label: "Đã duyệt cấp 1",    color: "teal"    },
                 { key: "PENDING_ADMIN_APPROVAL",               label: "Chờ duyệt cấp 2",   color: "blue"    },
                 { key: "APPROVED",                             label: "Đã duyệt",           color: "emerald" },
                 { key: "TRIP_IN_PROGRESS",                     label: "Đang thực hiện",     color: "cyan"    },
@@ -1381,19 +1378,16 @@ function EmployeeApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                   )}
                   {trip.status === "APPROVED" && (
                     <>
-                      <button onClick={event => { event.stopPropagation(); setSelected(trip); setScreen("itinerary"); }} className="text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors">Lịch trình</button>
                       <button onClick={event => { event.stopPropagation(); void (async () => { try { await startTrip(trip.id); await reload(); } catch (err) { alert(err instanceof Error ? err.message : "Không thể bắt đầu chuyến đi."); } })(); }} className="text-sm font-medium text-cyan-700 border border-cyan-200 hover:bg-cyan-50 px-3 py-1.5 rounded-lg transition-colors">Bắt đầu chuyến đi</button>
                     </>
                   )}
                   {trip.status === "TRIP_IN_PROGRESS" && (
                     <>
-                      <button onClick={event => { event.stopPropagation(); setSelected(trip); setScreen("itinerary"); }} className="text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors">Lịch trình</button>
                       <button onClick={event => { event.stopPropagation(); void (async () => { try { await endTrip(trip.id); await reload(); } catch (err) { alert(err instanceof Error ? err.message : "Không thể kết thúc chuyến đi."); } })(); }} className="text-sm font-medium text-cyan-700 border border-cyan-200 hover:bg-cyan-50 px-3 py-1.5 rounded-lg transition-colors">Kết thúc chuyến đi</button>
                     </>
                   )}
                   {trip.status === "EXPENSE_DRAFT" && (
                     <>
-                      <button onClick={event => { event.stopPropagation(); setSelected(trip); setScreen("itinerary"); }} className="text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors">Lịch trình</button>
                       <button onClick={event => { event.stopPropagation(); setSelected(trip); setScreen("expense"); }} className="text-sm font-medium text-purple-700 border border-purple-200 hover:bg-purple-50 px-3 py-1.5 rounded-lg transition-colors">Khai chi phí</button>
                     </>
                   )}
@@ -1981,7 +1975,7 @@ function EmpItinerary({ user, onLogout, trip, onBack }: { user: User; onLogout: 
   );
 }
 
-function EmpStatus({ user, onLogout, trip, onBack }: { user: User; onLogout: () => void; trip: Trip; onBack: () => void }) {
+function EmpStatus({ user, onLogout, trip, onBack, onOpenItinerary, onOpenExpense }: { user: User; onLogout: () => void; trip: Trip; onBack: () => void; onOpenItinerary?: () => void; onOpenExpense?: () => void }) {
   const [detailTrip, setDetailTrip] = useState<Trip | null>(null);
   const [detailLoading, setDetailLoading] = useState(true);
   const [detailError, setDetailError] = useState("");
@@ -2052,6 +2046,7 @@ function EmpStatus({ user, onLogout, trip, onBack }: { user: User; onLogout: () 
             <div className="mt-5 grid grid-cols-2 gap-4 rounded-lg border border-gray-100 bg-gray-50 p-3">
               <div><p className="text-[10px] text-gray-400">Tổng dự toán ngân sách</p><p className="mt-1 text-sm font-bold text-emerald-600">{trip.budget.toLocaleString("vi-VN")} đ</p></div>
             </div>
+            <div className="mt-5 border-t border-gray-100 pt-4"><p className="mb-3 text-xs font-semibold tracking-wider text-gray-400 uppercase">Lịch trình</p><ApprovalItineraryPreview tripId={trip.id} onAdd={!managerDone ? onOpenItinerary : undefined} /></div>
           </Card>
           <Card className="p-5 sm:p-6">
             <h2 className="border-b border-gray-100 pb-3 text-sm font-semibold text-[#1b2f35]">Trạng thái phê duyệt</h2>
@@ -2061,7 +2056,7 @@ function EmpStatus({ user, onLogout, trip, onBack }: { user: User; onLogout: () 
               {(trip.auditLogs ?? []).length === 0 && <p className="text-gray-400">Chưa có thao tác được ghi nhận.</p>}
               {(trip.auditLogs ?? []).map(log => <p key={log.id}><span className="mr-2 text-emerald-500">●</span>{auditActionLabel(log.action)} <span className="float-right text-gray-400">{new Date(log.timestamp).toLocaleString("vi-VN")}</span></p>)}
             </div>
-            <div className="mt-4 flex gap-2"><button onClick={onBack} className="flex-1 rounded-lg bg-gray-100 px-2 py-2 text-[10px] font-semibold text-gray-600 hover:bg-gray-200">Về Dashboard</button>{trip.status === "DRAFT" && <button onClick={onBack} className="flex-1 rounded-lg bg-emerald-50 px-2 py-2 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-100">Sửa hồ sơ</button>}</div>
+            {trip.status === "EXPENSE_DRAFT" && onOpenExpense && <div className="mt-4 flex flex-wrap gap-2"><button onClick={onOpenExpense} className="flex-1 rounded-lg bg-purple-50 px-2 py-2 text-[10px] font-semibold text-purple-700 hover:bg-purple-100">Khai chi phí</button></div>}
           </Card>
         </div>
         {trip.policyViolations && trip.policyViolations.length > 0 && <div className="mt-5"><PolicyBanner violations={trip.policyViolations} /></div>}

@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install backend dependencies
+        run: npm ci --prefix src/backend
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix src/frontend
+
+      - name: Validate Prisma schema
+        working-directory: src/backend
+        run: npx prisma validate
+
+      - name: Backend type-check
+        run: npm --prefix src/backend run type-check
+
+      - name: Frontend lint
+        run: npm --prefix src/frontend run lint
+
+      - name: Full test suite
+        run: npm run test:run
+
+      - name: Production build
+        run: npm --prefix src/backend run build

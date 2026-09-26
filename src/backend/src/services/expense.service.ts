@@ -132,8 +132,13 @@ export function validateExpenseSubmit(
   variance: VarianceResult,
   justification: string | null
 ): { valid: boolean; error?: string } {
-  // BR-TR-05: MỌI mức vượt dự toán (variance > 0) đều bắt buộc giải trình
-  if (variance.varianceAmount > 0 && !justification?.trim()) {
+  // BR-TR-05: chỉ variance dương đến 10% cần giải trình;
+  // variance >10% chuyển Manager re-approve và không chặn submit ở đây.
+  if (
+    variance.varianceAmount > 0 &&
+    variance.variancePct <= VARIANCE_JUSTIFICATION_THRESHOLD &&
+    !justification?.trim()
+  ) {
     return {
       valid: false,
       error: `Chi phí vượt dự toán ${variance.variancePct.toFixed(1)}%. Vui lòng nhập lý do giải trình.`,

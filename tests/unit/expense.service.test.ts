@@ -272,8 +272,8 @@ describe('validateExpenseSubmit', () => {
   });
 
   // E-11
-  it('[E-11] requiresJustification + justification = null → valid=false, error chứa %', () => {
-    const variance = makeVariance({ variancePct: 5, requiresJustification: true });
+  it('[E-11] variance 0–10% without justification → invalid', () => {
+    const variance = makeVariance({ variancePct: 5, varianceAmount: 500_000, requiresJustification: true });
     const result   = validateExpenseSubmit(variance, null);
 
     expect(result.valid).toBe(false);
@@ -282,21 +282,19 @@ describe('validateExpenseSubmit', () => {
   });
 
   // E-12
-  it('[E-12] requiresJustification + justification chỉ có spaces → valid=false', () => {
-    const variance = makeVariance({ variancePct: 5, requiresJustification: true });
+  it('[E-12] variance 0–10% with spaces-only justification → invalid', () => {
+    const variance = makeVariance({ variancePct: 5, varianceAmount: 500_000, requiresJustification: true });
     const result   = validateExpenseSubmit(variance, '   ');
 
     expect(result.valid).toBe(false);
   });
 
   // E-13
-  it('[E-13] requiresManagerReapproval → valid=false, error chứa ">10%"', () => {
-    const variance = makeVariance({ variancePct: 15, requiresManagerReapproval: true });
+  it('[E-13] variance >10% → Manager reapproval path, submit validation passes', () => {
+    const variance = makeVariance({ variancePct: 15, varianceAmount: 1_500_000, requiresManagerReapproval: true });
     const result   = validateExpenseSubmit(variance, null);
 
-    expect(result.valid).toBe(false);
-    expect(result.error).toMatch(/15\.0%/);
-    expect(result.error).toMatch(/Manager/i);
+    expect(result.valid).toBe(true);
   });
 
 });
@@ -618,8 +616,8 @@ describe('approveExpense', () => {
     const err = await approveExpense(TRIP_ID, OTHER_USER).catch(e => e);
 
     expect(err).toBeInstanceOf(AppError);
-    expect((err as AppError).statusCode).toBe(400);
-    expect((err as AppError).errorCode).toBe('VALIDATION_ERROR');
+    expect((err as AppError).statusCode).toBe(422);
+    expect((err as AppError).errorCode).toBe('EXPENSE_VARIANCE_EXCEEDED');
   });
 
   // E-34
@@ -648,6 +646,7 @@ describe('reapproveExpense', () => {
       managerReapprovalRequired: true,
       trip: {
         employeeId: OWNER_ID,
+        status:      'MANAGER_REAPPROVE',
         employee:   { managerId: MANAGER_ID },
       },
       ...overrides,

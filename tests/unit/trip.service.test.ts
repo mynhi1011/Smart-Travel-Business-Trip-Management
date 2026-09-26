@@ -206,8 +206,7 @@ describe('createTrip', () => {
       perDiemBudget: 5_000_000,
     });
 
-    expect(result.warnings.length).toBeGreaterThan(0);
-    expect(result.warnings[0].code).toBe('POLICY_VIOLATION_PER_DIEM_EXCEEDED');
+    expect(result.warnings).toHaveLength(0);
   });
 
   // T-04: isUrgent = true, có urgencyReason hợp lệ

@@ -57,7 +57,7 @@ interface DraftValidation {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const MODEL_NAME = 'gemini-3.7-flash';
+const MODEL_NAME = 'gemini-3.8-flash';
 const MAX_RETRIES = 2;
 const MAX_PROVIDER_ATTEMPTS = 3;
 const PROVIDER_RETRY_BASE_MS = 500;

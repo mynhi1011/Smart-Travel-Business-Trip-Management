@@ -71,7 +71,7 @@ describe('Gemini itinerary client', () => {
 
     expect(result.totalEstimatedCost).toBe(200_000);
     expect(result.guardrailPass).toBe(true);
-    expect(request).toEqual(expect.objectContaining({ model: 'gemini-3.7-flash', config: expect.objectContaining({ responseMimeType: 'application/json' }) }));
+    expect(request).toEqual(expect.objectContaining({ model: 'gemini-3.8-flash', config: expect.objectContaining({ responseMimeType: 'application/json' }) }));
     expect(prompt).toContain('1.000.000 VNĐ/đêm');
     expect(prompt).toContain('400.000 VNĐ/ngày');
     expect(prompt).toContain('Customer meeting');
